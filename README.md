@@ -1,6 +1,7 @@
 # Research Agent
 
 A multi-step AI research pipeline built with **LangGraph**, **Tavily**, and **LangChain** that automates web research and produces structured markdown reports.
+![Kapture 2026-03-05 at 14 08 29](https://github.com/user-attachments/assets/08d4fcf9-855f-410c-8520-76a376f774fd)
 
 ## Architecture
 
