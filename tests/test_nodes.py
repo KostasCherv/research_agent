@@ -1,0 +1,151 @@
+"""Tests for graph nodes (src/graph/nodes.py)"""
+
+from unittest.mock import patch, MagicMock
+import pytest
+
+
+# ---------------------------------------------------------------------------
+# search_node
+# ---------------------------------------------------------------------------
+
+def test_search_node_populates_results():
+    with patch("src.graph.nodes.perform_search") as mock_search:
+        mock_search.return_value = [{"url": "https://a.com", "title": "A", "content": "..."}]
+        from src.graph.nodes import search_node
+        state = search_node({"query": "LangGraph", "error": None})
+
+    assert state["error"] is None
+    assert len(state["search_results"]) == 1
+
+
+def test_search_node_sets_error_on_failure():
+    from src.errors import SearchError
+    with patch("src.graph.nodes.perform_search", side_effect=SearchError("boom")):
+        from src.graph.nodes import search_node
+        state = search_node({"query": "fail", "error": None})
+
+    assert state["error"] == "boom"
+    assert state["search_results"] == []
+
+
+# ---------------------------------------------------------------------------
+# retrieve_node
+# ---------------------------------------------------------------------------
+
+def test_retrieve_node_fetches_content():
+    def mock_asyncio_run(coro):
+        coro.close()  # prevent "coroutine never awaited" warning
+        return "fetched text"
+
+    with patch("src.graph.nodes.asyncio.run", side_effect=mock_asyncio_run):
+        from src.graph.nodes import retrieve_node
+        state = retrieve_node({
+            "query": "test",
+            "search_results": [{"url": "https://a.com", "title": "A", "content": "snippet"}],
+        })
+
+    assert len(state["retrieved_contents"]) == 1
+    assert state["retrieved_contents"][0]["raw_text"] == "fetched text"
+
+
+def test_retrieve_node_falls_back_to_snippet_on_failure():
+    from src.errors import FetchError
+
+    def mock_asyncio_run(coro):
+        coro.close()  # prevent "coroutine never awaited" warning
+        raise FetchError("no route")
+
+    with patch("src.graph.nodes.asyncio.run", side_effect=mock_asyncio_run):
+        from src.graph.nodes import retrieve_node
+        state = retrieve_node({
+            "query": "test",
+            "search_results": [{"url": "https://a.com", "title": "A", "content": "snippet text"}],
+        })
+
+    assert state["retrieved_contents"][0]["raw_text"] == "snippet text"
+
+
+# ---------------------------------------------------------------------------
+# summarize_node
+# ---------------------------------------------------------------------------
+
+def test_summarize_node_calls_llm():
+    mock_llm = MagicMock()
+    mock_llm.invoke.return_value = MagicMock(content="Nice summary.")
+
+    with patch("src.graph.nodes.get_llm", return_value=mock_llm):
+        from src.graph.nodes import summarize_node
+        state = summarize_node({
+            "query": "LangGraph",
+            "retrieved_contents": [{"url": "https://a.com", "title": "A", "raw_text": "Some text content here."}],
+        })
+
+    assert len(state["summaries"]) == 1
+    assert state["summaries"][0]["summary"] == "Nice summary."
+
+
+# ---------------------------------------------------------------------------
+# combine_node
+# ---------------------------------------------------------------------------
+
+def test_combine_node_merges_summaries():
+    mock_llm = MagicMock()
+    mock_llm.invoke.return_value = MagicMock(content="Combined insights.")
+
+    with patch("src.graph.nodes.get_llm", return_value=mock_llm):
+        from src.graph.nodes import combine_node
+        state = combine_node({
+            "query": "LangGraph",
+            "summaries": [{"url": "https://a.com", "title": "A", "summary": "Summary A"}],
+        })
+
+    assert state["combined_insights"] == "Combined insights."
+
+
+# ---------------------------------------------------------------------------
+# report_node
+# ---------------------------------------------------------------------------
+
+def test_report_node_generates_report():
+    mock_llm = MagicMock()
+    mock_llm.invoke.return_value = MagicMock(content="# My Report\nContent here.")
+
+    with patch("src.graph.nodes.get_llm", return_value=mock_llm):
+        from src.graph.nodes import report_node
+        state = report_node({
+            "query": "LangGraph",
+            "combined_insights": "Insights text",
+            "summaries": [{"url": "https://a.com", "title": "A", "summary": "x"}],
+        })
+
+    assert "# My Report" in state["report"]
+    assert "report_metadata" in state
+    assert state["report_metadata"]["title"] == "LangGraph"
+
+
+# ---------------------------------------------------------------------------
+# vector_store_node
+# ---------------------------------------------------------------------------
+
+def test_vector_store_node_skips_when_disabled():
+    from src.graph.nodes import vector_store_node
+    state = vector_store_node({"query": "test", "use_vector_store": False, "report": "# R"})
+    # Should pass through unchanged (no VectorStoreManager call)
+    assert state["query"] == "test"
+
+
+def test_vector_store_node_saves_when_enabled():
+    with patch("src.graph.nodes.VectorStoreManager") as mock_cls:
+        mock_manager = MagicMock()
+        mock_manager.save_report.return_value = "report_001"
+        mock_cls.return_value = mock_manager
+
+        from src.graph.nodes import vector_store_node
+        state = vector_store_node({
+            "query": "LangGraph",
+            "use_vector_store": True,
+            "report": "# Report",
+            "report_metadata": {"title": "LangGraph"},
+        })
+
+    mock_manager.save_report.assert_called_once()

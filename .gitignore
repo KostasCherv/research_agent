@@ -1,0 +1,9 @@
+.venv
+.env
+__pycache__
+docs
+research_agent.egg-info
+.ruff_cache
+.pytest_cache
+.mypy_cache
+chroma_db
