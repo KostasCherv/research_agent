@@ -5,15 +5,38 @@ A multi-step AI research pipeline built with **LangGraph**, **Tavily**, and **La
 
 ## Architecture
 
-```
-User Query
-    │
-    ▼
-search_node  →  retrieve_node  →  summarize_node  →  combine_node  →  report_node  →  vector_store_node
- (Tavily)         (httpx/BS4)        (LLM)              (LLM)            (LLM)            (Chroma)
+```mermaid
+flowchart LR
+    userQuery["User query"] --> search["search (Tavily)"]
+    search -->|"continue"| retrieve["retrieve (httpx + BeautifulSoup)"]
+    search -->|"abort on error"| abortNode["abort"]
+    retrieve -->|"ok"| memoryContext["memory_context (Chroma search)"]
+    retrieve -->|"empty"| emptyNode["empty"]
+    memoryContext --> summarize["summarize (LLM)"]
+    summarize --> combine["combine (LLM)"]
+    combine --> report["report (LLM markdown)"]
+    report --> vectorStore["vector_store (optional Chroma persist)"]
+    vectorStore --> endNode["END"]
+    abortNode --> endNode
+    emptyNode --> endNode
 ```
 
 Each node is a pure function that receives and returns a `ResearchState` TypedDict. Conditional edges handle error cases and empty result sets without crashing the pipeline.
+
+## Tech Stack
+
+| Area | Technologies / Tools |
+|---|---|
+| Language | Python 3.11+, TypeScript |
+| Orchestration | LangGraph |
+| LLM Layer | LangChain, OpenAI, Ollama |
+| Web Research | Tavily |
+| Retrieval & Parsing | httpx, BeautifulSoup4 |
+| API | FastAPI, Uvicorn, SSE |
+| CLI | Typer, Rich |
+| Vector Memory | ChromaDB |
+| Frontend | React 19, Vite, react-markdown, lucide-react |
+| Code Quality | Pytest, Ruff, mypy, ESLint |
 
 ## Features
 
@@ -63,6 +86,54 @@ python -m src.main serve --reload
 
 ```bash
 bash scripts/demo.sh "How does retrieval-augmented generation work?"
+```
+
+## UI (Frontend)
+
+The `ui/` app provides a browser interface for:
+- entering research queries
+- streaming node-by-node progress from the backend
+- rendering the final markdown report
+
+Install and run:
+
+```bash
+cd ui
+npm install
+npm run dev
+```
+
+Build and preview production assets:
+
+```bash
+cd ui
+npm run build
+npm run preview
+```
+
+Frontend API configuration:
+- The UI reads `VITE_API_BASE_URL`.
+- If unset, it defaults to `http://localhost:8000`.
+
+Run backend + frontend together (two terminals):
+
+```bash
+# Terminal 1 (repo root)
+python -m src.main serve --reload
+
+# Terminal 2
+cd ui
+npm run dev
+```
+
+```mermaid
+flowchart LR
+    browser["Browser UI (React/Vite)"] -->|"POST /research (SSE)"| api["FastAPI API"]
+    api --> pipelineFlow["LangGraph pipeline"]
+    pipelineFlow --> reportOut["Markdown report"]
+    pipelineFlow --> memorySearch["Chroma memory search (memory_context)"]
+    reportOut -->|"if enabled"| chromaPersist["Chroma report persist"]
+    reportOut --> browser
 ```
 
 ## API
@@ -138,4 +209,12 @@ src/
 │   ├── fetcher.py      # Async URL fetcher
 │   └── vector_store.py # ChromaDB manager
 └── api/endpoints.py    # FastAPI + SSE
+ui/
+├── src/
+│   ├── App.tsx                 # Main UI shell/state
+│   ├── api/client.ts           # Health + SSE stream client
+│   ├── components/ChatForm.tsx # Query input form
+│   ├── components/ResearchProgress.tsx
+│   └── components/ReportViewer.tsx
+└── package.json                # Vite scripts and deps
 ```
