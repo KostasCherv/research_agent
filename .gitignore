@@ -7,3 +7,4 @@ research_agent.egg-info
 .pytest_cache
 .mypy_cache
 chroma_db
+reports
