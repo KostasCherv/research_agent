@@ -48,6 +48,7 @@ Each node is a pure function that receives and returns a `ResearchState` TypedDi
 | Streaming API | FastAPI SSE endpoint for real-time progress |
 | CLI | Typer + Rich for beautiful terminal output |
 | Vector storage | ChromaDB for persisting and searching reports |
+| LangSmith observability | Full workflow tracing: root runs, node spans, external calls, and failure context |
 
 ## Quick Start
 
@@ -165,6 +166,18 @@ Each event:
 {"node": "__end__", "data": {}}
 ```
 
+## LangSmith Observability
+
+The pipeline includes end-to-end LangSmith instrumentation, so you can track the entire multi-step flow in one place.
+
+- A single **root run** is created per workflow execution (CLI or API).
+- Every graph node (`search`, `retrieve`, `memory_context`, `summarize`, `combine`, `report`, `vector_store`) is traced as a child span.
+- External operations are traced as nested spans (Tavily search, URL fetch, LLM calls, Chroma reads/writes).
+- Routing and terminal outcomes are visible (`continue`, `abort`, `empty`) with status and timing context.
+- Redaction-by-default protects sensitive payloads while preserving useful debugging metadata.
+
+You get full observability from input to final report: where time is spent, where failures happen, and how data moves through the workflow.
+
 ## Environment Variables
 
 | Variable | Default | Description |
@@ -177,6 +190,14 @@ Each event:
 | `TAVILY_API_KEY` | — | Required for web search |
 | `CHROMA_PERSIST_DIRECTORY` | `./chroma_db` | ChromaDB storage path |
 | `MAX_SEARCH_RESULTS` | `5` | Number of Tavily results |
+| `LANGSMITH_TRACING` | `false` | Enable LangSmith tracing (`true`/`false`) |
+| `LANGSMITH_PROJECT` | `research-agent` | LangSmith project name |
+| `LANGSMITH_API_KEY` | — | LangSmith API key |
+| `LANGSMITH_ENDPOINT` | `https://api.smith.langchain.com` | LangSmith API endpoint |
+| `LANGSMITH_REDACTION_MODE` | `redacted_default` | `full_payloads`, `redacted_default`, or `metadata_only` |
+| `LANGSMITH_SAMPLING_RATE` | `1.0` | Fraction of workflow runs to trace (0.0-1.0) |
+
+When `LANGSMITH_TRACING=true`, workflow runs and per-node spans are sent to LangSmith with redaction-by-default payload handling.
 
 ## Development
 

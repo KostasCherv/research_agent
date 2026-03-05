@@ -26,6 +26,7 @@ def search(
 ):
     """Run the full research pipeline for a query and print the report."""
     from src.graph.graph import build_graph
+    from src.observability import end_workflow_run, start_workflow_run
 
     console.print(Panel(f"[bold cyan]Research Agent[/bold cyan]\n[dim]{query}[/dim]"))
 
@@ -35,44 +36,75 @@ def search(
         "error": None,
     }
 
-    with Progress(
-        SpinnerColumn(),
-        TextColumn("[progress.description]{task.description}"),
-        console=console,
-        transient=True,
-    ) as progress:
-        task = progress.add_task("Running research pipeline…", total=None)
-        graph = build_graph()
-        final_state = None
-        for event in graph.stream(initial_state):
-            for node_name in event:
-                progress.update(task, description=f"[cyan]{node_name}[/cyan] ✓")
-            final_state = event
+    trace_status = "success"
+    trace_error: str | None = None
 
-    if not final_state:
-        console.print("[red]Pipeline returned no state.[/red]")
-        raise typer.Exit(code=1)
+    with start_workflow_run(
+        entrypoint="cli",
+        query=query,
+        use_vector_store=vector_store,
+    ) as trace_ctx:
+        try:
+            with Progress(
+                SpinnerColumn(),
+                TextColumn("[progress.description]{task.description}"),
+                console=console,
+                transient=True,
+            ) as progress:
+                task = progress.add_task("Running research pipeline…", total=None)
+                graph = build_graph()
+                final_state = None
+                for event in graph.stream(initial_state):
+                    for node_name in event:
+                        progress.update(task, description=f"[cyan]{node_name}[/cyan] ✓")
+                    final_state = event
 
-    # Grab the last state values from the final event dict
-    state = list(final_state.values())[-1]
+            if not final_state:
+                trace_status = "error"
+                trace_error = "Pipeline returned no state."
+                console.print("[red]Pipeline returned no state.[/red]")
+                raise typer.Exit(code=1)
 
-    error = state.get("error")
-    if error:
-        console.print(f"[bold red]Error:[/bold red] {error}")
-        raise typer.Exit(code=1)
+            # Grab the last state values from the final event dict
+            state = list(final_state.values())[-1]
 
-    report = state.get("report", "")
-    if not report:
-        console.print("[yellow]Warning:[/yellow] Report is empty.")
-        raise typer.Exit(code=1)
+            error = state.get("error")
+            if error:
+                trace_status = "error"
+                trace_error = str(error)
+                console.print(f"[bold red]Error:[/bold red] {error}")
+                raise typer.Exit(code=1)
 
-    console.print("\n")
-    console.print(Markdown(report))
+            report = state.get("report", "")
+            if not report:
+                trace_status = "error"
+                trace_error = "Report is empty."
+                console.print("[yellow]Warning:[/yellow] Report is empty.")
+                raise typer.Exit(code=1)
 
-    if output:
-        with open(output, "w", encoding="utf-8") as fh:
-            fh.write(report)
-        console.print(f"\n[green]Report saved to[/green] {output}")
+            console.print("\n")
+            console.print(Markdown(report))
+
+            if output:
+                with open(output, "w", encoding="utf-8") as fh:
+                    fh.write(report)
+                console.print(f"\n[green]Report saved to[/green] {output}")
+
+            end_workflow_run(
+                trace_ctx,
+                status=trace_status,
+                outputs={
+                    "node": "__end__",
+                    "has_report": bool(report),
+                    "has_error": bool(error),
+                },
+            )
+        except Exception as exc:
+            if not trace_error:
+                trace_error = str(exc)
+            trace_status = "error"
+            end_workflow_run(trace_ctx, status=trace_status, error=trace_error)
+            raise
 
 
 @app.command()

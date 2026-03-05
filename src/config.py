@@ -29,5 +29,28 @@ class Settings(BaseSettings):
     api_host: str = Field(default="0.0.0.0")
     api_port: int = Field(default=8000)
 
+    # Observability (LangSmith)
+    langsmith_tracing: bool = Field(
+        default=False,
+        description="Enable LangSmith tracing for workflow and node spans.",
+    )
+    langsmith_project: str = Field(
+        default="research-agent",
+        description="LangSmith project name for traced runs.",
+    )
+    langsmith_api_key: str = Field(default="", description="LangSmith API key")
+    langsmith_endpoint: str = Field(
+        default="https://api.smith.langchain.com",
+        description="LangSmith API endpoint.",
+    )
+    langsmith_redaction_mode: str = Field(
+        default="redacted_default",
+        description="Trace payload policy: full_payloads|redacted_default|metadata_only",
+    )
+    langsmith_sampling_rate: float = Field(
+        default=1.0,
+        description="Fraction of runs to trace (0.0 to 1.0).",
+    )
+
 
 settings = Settings()

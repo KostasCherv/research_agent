@@ -11,6 +11,7 @@ from pydantic import BaseModel
 
 from src.graph.graph import build_graph
 from src.errors import ResearchAgentError
+from src.observability import end_workflow_run, start_workflow_run
 
 logger = logging.getLogger(__name__)
 
@@ -74,23 +75,47 @@ async def _stream_research(query: str, use_vector_store: bool) -> AsyncGenerator
         "error": None,
     }
 
-    try:
-        async for event in graph.astream(initial_state):
-            for node_name, node_state in event.items():
-                payload = {
-                    "node": node_name,
-                    "data": {
-                        k: v
-                        for k, v in node_state.items()
-                        if k in {"error", "report", "combined_insights"}
-                    },
-                }
-                yield f"data: {json.dumps(payload)}\n\n"
+    with start_workflow_run(
+        entrypoint="api",
+        query=query,
+        use_vector_store=use_vector_store,
+    ) as trace_ctx:
+        final_node_state: dict | None = None
+        try:
+            async for event in graph.astream(initial_state):
+                for node_name, node_state in event.items():
+                    final_node_state = node_state
+                    payload = {
+                        "workflow_id": trace_ctx.workflow_id,
+                        "node": node_name,
+                        "data": {
+                            k: v
+                            for k, v in node_state.items()
+                            if k in {"error", "report", "combined_insights"}
+                        },
+                    }
+                    yield f"data: {json.dumps(payload)}\n\n"
 
-        yield "data: {\"node\": \"__end__\", \"data\": {}}\n\n"
-    except Exception as exc:
-        error_payload = {"node": "__error__", "data": {"error": str(exc)}}
-        yield f"data: {json.dumps(error_payload)}\n\n"
+            end_workflow_run(
+                trace_ctx,
+                status="success",
+                outputs={
+                    "node": "__end__",
+                    "has_report": bool(final_node_state and final_node_state.get("report")),
+                    "has_error": bool(final_node_state and final_node_state.get("error")),
+                },
+            )
+            yield (
+                f"data: {json.dumps({'workflow_id': trace_ctx.workflow_id, 'node': '__end__', 'data': {}})}\n\n"
+            )
+        except Exception as exc:
+            end_workflow_run(trace_ctx, status="error", error=str(exc))
+            error_payload = {
+                "workflow_id": trace_ctx.workflow_id,
+                "node": "__error__",
+                "data": {"error": str(exc)},
+            }
+            yield f"data: {json.dumps(error_payload)}\n\n"
 
 
 @app.post("/research", tags=["Research"])

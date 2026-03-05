@@ -15,20 +15,35 @@ from src.graph.nodes import (
     vector_store_node,
 )
 from src.graph.edges import should_abort, has_results
+from src.observability.langsmith import start_step_span
 
 logger = logging.getLogger(__name__)
 
 
 def _abort_node(state: ResearchState) -> ResearchState:
     """Terminal node reached on pipeline abort."""
-    logger.error("Research pipeline aborted. Error: %s", state.get("error"))
-    return state
+    with start_step_span(
+        name="abort_node",
+        run_type="tool",
+        node_name="abort",
+        inputs={"has_error": bool(state.get("error"))},
+        tags=["terminal"],
+    ):
+        logger.error("Research pipeline aborted. Error: %s", state.get("error"))
+        return state
 
 
 def _empty_node(state: ResearchState) -> ResearchState:
     """Terminal node reached when search returned no results."""
-    logger.warning("Search returned no results for query: %s", state.get("query"))
-    return {**state, "report": "No results found for the given query.", "report_metadata": {}}
+    with start_step_span(
+        name="empty_node",
+        run_type="tool",
+        node_name="empty",
+        inputs={"query": state.get("query", "")},
+        tags=["terminal"],
+    ):
+        logger.warning("Search returned no results for query: %s", state.get("query"))
+        return {**state, "report": "No results found for the given query.", "report_metadata": {}}
 
 
 def build_graph():
