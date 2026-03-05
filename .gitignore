@@ -8,3 +8,4 @@ research_agent.egg-info
 .mypy_cache
 chroma_db
 reports
+.worktrees
