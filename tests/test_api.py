@@ -1,13 +1,17 @@
 """Tests for FastAPI endpoints (src/api/endpoints.py)"""
 
 import json
-from unittest.mock import patch, MagicMock, AsyncMock
-import pytest
+from unittest.mock import patch, MagicMock
 from fastapi.testclient import TestClient
 
 from src.api.endpoints import app
 
 client = TestClient(app)
+
+
+def _mock_asyncio_run(coro):
+    coro.close()  # prevent "coroutine was never awaited" warnings
+    return "Page text"
 
 
 def test_health_returns_ok():
@@ -25,7 +29,7 @@ def test_research_streams_events():
 
     with (
         patch("src.graph.nodes.perform_search", return_value=search_result),
-        patch("src.graph.nodes.asyncio.run", return_value="Page text"),
+        patch("src.graph.nodes.asyncio.run", side_effect=_mock_asyncio_run),
         patch("src.graph.nodes.get_llm", return_value=mock_llm),
         patch("src.graph.nodes.VectorStoreManager"),
     ):

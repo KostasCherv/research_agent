@@ -32,3 +32,5 @@ class ResearchState(TypedDict, total=False):
     # Control flow
     error: str | None               # Set on unrecoverable errors
     use_vector_store: bool          # Whether to persist to Chroma
+
+    memory_context: str | None      # Memory context for the LLM

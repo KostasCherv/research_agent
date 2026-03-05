@@ -18,6 +18,7 @@ logger = logging.getLogger(__name__)
 # Node 1: Search
 # ---------------------------------------------------------------------------
 
+
 def search_node(state: ResearchState) -> ResearchState:
     """Run a Tavily web search for the user query.
 
@@ -38,6 +39,7 @@ def search_node(state: ResearchState) -> ResearchState:
 # Node 2: Retrieve
 # ---------------------------------------------------------------------------
 
+
 def retrieve_node(state: ResearchState) -> ResearchState:
     """Fetch full text for each search-result URL (up to 2 retries each).
 
@@ -54,17 +56,23 @@ def retrieve_node(state: ResearchState) -> ResearchState:
         for attempt in range(1, 3):
             try:
                 text = asyncio.run(fetch_url_content(url))
-                retrieved.append({"url": url, "title": item.get("title", ""), "raw_text": text})
+                retrieved.append(
+                    {"url": url, "title": item.get("title", ""), "raw_text": text}
+                )
                 break
             except FetchError as exc:
-                logger.warning("[retrieve_node] attempt %d failed for %s: %s", attempt, url, exc)
+                logger.warning(
+                    "[retrieve_node] attempt %d failed for %s: %s", attempt, url, exc
+                )
                 if attempt == 2:
                     # Fall back to the Tavily snippet
-                    retrieved.append({
-                        "url": url,
-                        "title": item.get("title", ""),
-                        "raw_text": item.get("content", ""),
-                    })
+                    retrieved.append(
+                        {
+                            "url": url,
+                            "title": item.get("title", ""),
+                            "raw_text": item.get("content", ""),
+                        }
+                    )
 
     return {**state, "retrieved_contents": retrieved}
 
@@ -72,6 +80,7 @@ def retrieve_node(state: ResearchState) -> ResearchState:
 # ---------------------------------------------------------------------------
 # Node 3: Summarize
 # ---------------------------------------------------------------------------
+
 
 def summarize_node(state: ResearchState) -> ResearchState:
     """Ask the LLM to summarize each retrieved source.
@@ -96,12 +105,16 @@ def summarize_node(state: ResearchState) -> ResearchState:
         )
         try:
             response = llm.invoke(prompt)
-            summary_text = str(response.content) if hasattr(response, "content") else str(response)
-            summaries.append({
-                "url": item["url"],
-                "title": item["title"],
-                "summary": summary_text.strip(),
-            })
+            summary_text = (
+                str(response.content) if hasattr(response, "content") else str(response)
+            )
+            summaries.append(
+                {
+                    "url": item["url"],
+                    "title": item["title"],
+                    "summary": summary_text.strip(),
+                }
+            )
         except Exception as exc:
             raise LLMError(f"Summarization failed for {item['url']}: {exc}") from exc
 
@@ -111,6 +124,7 @@ def summarize_node(state: ResearchState) -> ResearchState:
 # ---------------------------------------------------------------------------
 # Node 4: Combine
 # ---------------------------------------------------------------------------
+
 
 def combine_node(state: ResearchState) -> ResearchState:
     """Merge all per-source summaries into a single coherent synthesis.
@@ -124,17 +138,21 @@ def combine_node(state: ResearchState) -> ResearchState:
     summaries_text = "\n\n".join(
         f"Source: {s['title']} ({s['url']})\n{s['summary']}" for s in summaries
     )
+    memory_context = state.get("memory_context", "")
     prompt = (
         f"You are a research analyst. Given the following source summaries for the query "
         f"'{query}', write a comprehensive and well-structured synthesis of the key insights "
         f"(3–6 paragraphs). Do not repeat the same point from multiple sources; instead merge "
-        f"and reconcile them.\n\n{summaries_text}"
+        f"and reconcile them.\n\n{summaries_text}\n\n"
+        f"Prior context from past internal reports (may be stale):\n{memory_context}"
     )
 
     llm = get_llm(temperature=0.3)
     try:
         response = llm.invoke(prompt)
-        combined = str(response.content) if hasattr(response, "content") else str(response)
+        combined = (
+            str(response.content) if hasattr(response, "content") else str(response)
+        )
         return {**state, "combined_insights": combined.strip()}
     except Exception as exc:
         raise LLMError(f"Combine step failed: {exc}") from exc
@@ -143,6 +161,7 @@ def combine_node(state: ResearchState) -> ResearchState:
 # ---------------------------------------------------------------------------
 # Node 5: Report
 # ---------------------------------------------------------------------------
+
 
 def report_node(state: ResearchState) -> ResearchState:
     """Generate a final structured markdown report.
@@ -170,7 +189,9 @@ def report_node(state: ResearchState) -> ResearchState:
     llm = get_llm(temperature=0.2)
     try:
         response = llm.invoke(prompt)
-        report_text = str(response.content) if hasattr(response, "content") else str(response)
+        report_text = (
+            str(response.content) if hasattr(response, "content") else str(response)
+        )
         report_text = report_text.strip()
     except Exception as exc:
         raise LLMError(f"Report generation failed: {exc}") from exc
@@ -191,6 +212,7 @@ def report_node(state: ResearchState) -> ResearchState:
 # ---------------------------------------------------------------------------
 # Node 6: Vector Store
 # ---------------------------------------------------------------------------
+
 
 def vector_store_node(state: ResearchState) -> ResearchState:
     """Persist the final report to ChromaDB (runs only when enabled).
@@ -215,3 +237,28 @@ def vector_store_node(state: ResearchState) -> ResearchState:
         logger.warning("[vector_store_node] could not save: %s", exc)
 
     return state
+
+
+# ---------------------------------------------------------------------------
+# Node 7: Memory Context
+# ---------------------------------------------------------------------------
+
+
+def memory_context_node(state: ResearchState) -> ResearchState:
+    """Generate a memory context for the LLM using the vector store.
+
+    Populates ``memory_context`` with the most relevant reports from the vector store.
+    """
+    try:
+        vector_store = VectorStoreManager()
+        query = state.get("query", "")
+        context = vector_store.search_reports(query)
+        if context:
+            context = "\n\n".join([c["document"] for c in context])[:2000]
+        else:
+            context = ""
+
+        return {**state, "memory_context": context}
+    except Exception as exc:
+        logger.warning("[memory_context_node] could not generate context: %s", exc)
+        return {**state, "memory_context": ""}

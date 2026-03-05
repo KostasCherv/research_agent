@@ -1,7 +1,6 @@
 """Tests for graph nodes (src/graph/nodes.py)"""
 
 from unittest.mock import patch, MagicMock
-import pytest
 
 
 # ---------------------------------------------------------------------------
@@ -149,3 +148,50 @@ def test_vector_store_node_saves_when_enabled():
         })
 
     mock_manager.save_report.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# memory_context_node
+# ---------------------------------------------------------------------------
+
+
+def test_memory_context_node_builds_truncated_context():
+    with patch("src.graph.nodes.VectorStoreManager") as mock_cls:
+        mock_manager = MagicMock()
+        long_doc = "A" * 2500
+        mock_manager.search_reports.return_value = [
+            {"id": "report_1", "document": long_doc, "metadata": {}},
+            {"id": "report_2", "document": "Second doc", "metadata": {}},
+        ]
+        mock_cls.return_value = mock_manager
+
+        from src.graph.nodes import memory_context_node
+        state = memory_context_node({"query": "LangGraph"})
+
+    assert "memory_context" in state
+    assert state["memory_context"].startswith("A")
+    assert len(state["memory_context"]) == 2000
+
+
+def test_memory_context_node_returns_empty_context_when_no_results():
+    with patch("src.graph.nodes.VectorStoreManager") as mock_cls:
+        mock_manager = MagicMock()
+        mock_manager.search_reports.return_value = []
+        mock_cls.return_value = mock_manager
+
+        from src.graph.nodes import memory_context_node
+        state = memory_context_node({"query": "LangGraph"})
+
+    assert state["memory_context"] == ""
+
+
+def test_memory_context_node_handles_lookup_failure():
+    with patch("src.graph.nodes.VectorStoreManager") as mock_cls:
+        mock_manager = MagicMock()
+        mock_manager.search_reports.side_effect = RuntimeError("chroma unavailable")
+        mock_cls.return_value = mock_manager
+
+        from src.graph.nodes import memory_context_node
+        state = memory_context_node({"query": "LangGraph"})
+
+    assert state["memory_context"] == ""

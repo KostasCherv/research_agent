@@ -6,6 +6,7 @@ from langgraph.graph import StateGraph, END
 
 from src.graph.state import ResearchState
 from src.graph.nodes import (
+    memory_context_node,
     search_node,
     retrieve_node,
     summarize_node,
@@ -41,6 +42,7 @@ def build_graph():
     # Register all nodes
     builder.add_node("search",       search_node)
     builder.add_node("retrieve",     retrieve_node)
+    builder.add_node("memory_context", memory_context_node)
     builder.add_node("summarize",    summarize_node)
     builder.add_node("combine",      combine_node)
     builder.add_node("report",       report_node)
@@ -62,10 +64,11 @@ def build_graph():
     builder.add_conditional_edges(
         "retrieve",
         has_results,
-        {"ok": "summarize", "empty": "empty"},
+        {"ok": "memory_context", "empty": "empty"},
     )
 
     # Linear tail of the pipeline
+    builder.add_edge("memory_context", "summarize")
     builder.add_edge("summarize",    "combine")
     builder.add_edge("combine",      "report")
     builder.add_edge("report",       "vector_store")
