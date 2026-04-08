@@ -28,6 +28,29 @@ class Settings(BaseSettings):
     # API
     api_host: str = Field(default="0.0.0.0")
     api_port: int = Field(default=8000)
+    enforce_session_auth: bool = Field(
+        default=True,
+        description="Require authentication for session endpoints.",
+    )
+
+    # Supabase
+    supabase_url: str = Field(default="", description="Supabase project URL")
+    supabase_service_role_key: str = Field(
+        default="",
+        description="Supabase service role key used by backend for PostgREST.",
+    )
+    supabase_jwks_url: str = Field(
+        default="",
+        description="Supabase Auth JWKS URL for JWT verification.",
+    )
+    supabase_jwt_audience: str = Field(
+        default="authenticated",
+        description="Expected JWT audience for Supabase access tokens.",
+    )
+    supabase_jwt_secret: str = Field(
+        default="",
+        description="Supabase JWT secret (used only for HS256 token verification fallback).",
+    )
 
     # Observability (LangSmith)
     langsmith_tracing: bool = Field(

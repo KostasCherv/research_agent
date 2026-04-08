@@ -4,7 +4,7 @@ import json
 import logging
 from typing import AsyncGenerator
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
@@ -12,12 +12,20 @@ from pydantic import BaseModel
 from src.graph.graph import build_graph
 from src.errors import ResearchAgentError
 from src.observability import end_workflow_run, start_workflow_run
+from src.config import settings
+from src.auth import AuthenticatedUser, get_authenticated_user
 from src.sessions import (
     Session,
     ConversationTurn,
+    append_run,
+    append_turn,
     create_session,
     generate_run_id,
     get_session,
+    list_sessions,
+    delete_session,
+    update_session_title,
+    ensure_store_initialized,
 )
 from src.tools.vector_store import VectorStoreManager
 from src.llm.factory import get_llm
@@ -42,6 +50,28 @@ app.add_middleware(
 )
 
 
+@app.on_event("startup")
+async def validate_session_store_configuration() -> None:
+    """Warn when session persistence is unavailable, but keep API bootable."""
+    has_url = bool(settings.supabase_url)
+    has_key = bool(settings.supabase_service_role_key)
+
+    if not has_url and not has_key:
+        logger.info(
+            "[startup] Supabase session persistence is disabled; non-session routes remain available."
+        )
+        return
+
+    if not has_url or not has_key:
+        logger.warning(
+            "[startup] Supabase session persistence is partially configured; "
+            "session endpoints may fail until SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are both set."
+        )
+        return
+
+    ensure_store_initialized()
+
+
 # ---------------------------------------------------------------------------
 # Request / Response models
 # ---------------------------------------------------------------------------
@@ -54,6 +84,14 @@ class ResearchRequest(BaseModel):
 class FollowupRequest(BaseModel):
     question: str
     run_id: str | None = None
+
+
+class CreateSessionRequest(BaseModel):
+    query: str | None = None
+
+
+class UpdateSessionTitleRequest(BaseModel):
+    title: str
 
 
 class HealthResponse(BaseModel):
@@ -79,6 +117,7 @@ async def _stream_research(
     use_vector_store: bool,
     session: Session | None = None,
     run_id: str | None = None,
+    user_id: str | None = None,
 ) -> AsyncGenerator[str, None]:
     """Run the research graph and stream node events as SSE.
 
@@ -119,8 +158,8 @@ async def _stream_research(
                     yield f"data: {json.dumps(payload)}\n\n"
 
             # Persist session state after a successful run
-            if session is not None and run_id is not None and final_node_state:
-                _record_session_run(session, run_id, query, final_node_state)
+            if session is not None and run_id is not None and final_node_state and user_id:
+                await _record_session_run(session, user_id, run_id, query, final_node_state)
 
             end_workflow_run(
                 trace_ctx,
@@ -144,8 +183,9 @@ async def _stream_research(
             yield f"data: {json.dumps(error_payload)}\n\n"
 
 
-def _record_session_run(
+async def _record_session_run(
     session: Session,
+    user_id: str,
     run_id: str,
     query: str,
     final_state: dict,
@@ -164,6 +204,7 @@ def _record_session_run(
         report=final_state.get("report", ""),
     )
     session.runs.append(run)
+    await append_run(user_id=user_id, session_id=session.session_id, run=run)
 
     # Persist source chunks for follow-up retrieval
     sources_to_chunk = retrieved if retrieved else summaries
@@ -181,6 +222,7 @@ def _record_session_run(
 
 async def _stream_followup(
     session: Session,
+    user_id: str,
     question: str,
     run_id: str,
 ) -> AsyncGenerator[str, None]:
@@ -233,17 +275,17 @@ async def _stream_followup(
             citations.append({"source_url": url, "source_title": c["source_title"]})
 
     # Record turns in conversation history
-    session.conversation.append(
-        ConversationTurn(role="user", content=question, run_id=run_id)
+    user_turn = ConversationTurn(role="user", content=question, run_id=run_id)
+    assistant_turn = ConversationTurn(
+        role="assistant",
+        content=full_answer,
+        run_id=run_id,
+        citations=citations,
     )
-    session.conversation.append(
-        ConversationTurn(
-            role="assistant",
-            content=full_answer,
-            run_id=run_id,
-            citations=citations,
-        )
-    )
+    session.conversation.append(user_turn)
+    session.conversation.append(assistant_turn)
+    await append_turn(user_id=user_id, session_id=session.session_id, turn=user_turn)
+    await append_turn(user_id=user_id, session_id=session.session_id, turn=assistant_turn)
 
     yield f"data: {json.dumps({'type': 'citations', 'citations': citations})}\n\n"
     yield f"data: {json.dumps({'type': 'done'})}\n\n"
@@ -273,31 +315,122 @@ async def research(body: ResearchRequest):
 # Session endpoints
 # ---------------------------------------------------------------------------
 
+
+def _generate_session_title(query: str | None) -> str:
+    """Generate a short session title from the initial query using the LLM."""
+    from src.sessions import suggest_session_title
+
+    fallback = suggest_session_title(query)
+    if not query or not query.strip():
+        return fallback
+
+    prompt = (
+        "Create a concise title (max 6 words) for this research session.\n"
+        "Return plain text only, no quotes, no punctuation at the end.\n"
+        f"Query: {query.strip()}"
+    )
+    try:
+        llm = get_llm(temperature=0.1)
+        result = llm.invoke(prompt)
+        text = result.content if hasattr(result, "content") else str(result)
+        candidate = " ".join(text.strip().split())
+        if not candidate:
+            return fallback
+        words = candidate.split(" ")
+        if len(words) > 6:
+            candidate = " ".join(words[:6])
+        return candidate
+    except Exception:
+        return fallback
+
 @app.post("/sessions", tags=["Sessions"])
-async def create_session_endpoint():
+async def create_session_endpoint(
+    body: CreateSessionRequest = CreateSessionRequest(),
+    current_user: AuthenticatedUser = Depends(get_authenticated_user),
+):
     """Create a new research session."""
-    session = create_session()
-    return {"session_id": session.session_id, "created_at": session.created_at}
+    title = _generate_session_title(body.query)
+    session = await create_session(current_user.user_id, title=title)
+    return {"session_id": session.session_id, "title": session.title, "created_at": session.created_at}
+
+
+@app.get("/sessions", tags=["Sessions"])
+async def list_sessions_endpoint(
+    current_user: AuthenticatedUser = Depends(get_authenticated_user),
+):
+    """List session summaries for the authenticated user."""
+    return {"sessions": await list_sessions(current_user.user_id)}
 
 
 @app.get("/sessions/{session_id}", tags=["Sessions"])
-async def get_session_endpoint(session_id: str):
+async def get_session_endpoint(
+    session_id: str,
+    current_user: AuthenticatedUser = Depends(get_authenticated_user),
+):
     """Return session state including runs and conversation history."""
-    session = get_session(session_id)
+    session = await get_session(session_id, current_user.user_id)
     if session is None:
         raise HTTPException(status_code=404, detail=f"Session '{session_id}' not found.")
     return session.to_dict()
 
 
+@app.patch("/sessions/{session_id}", tags=["Sessions"])
+async def update_session_title_endpoint(
+    session_id: str,
+    body: UpdateSessionTitleRequest,
+    current_user: AuthenticatedUser = Depends(get_authenticated_user),
+):
+    """Update a session title."""
+    title = " ".join(body.title.strip().split())
+    if not title:
+        raise HTTPException(status_code=400, detail="Session title cannot be empty.")
+    if len(title) > 120:
+        raise HTTPException(status_code=400, detail="Session title is too long.")
+
+    updated = await update_session_title(
+        current_user.user_id,
+        session_id=session_id,
+        title=title,
+    )
+    if not updated:
+        raise HTTPException(status_code=404, detail=f"Session '{session_id}' not found.")
+    return {"session_id": session_id, "title": title}
+
+
+@app.delete("/sessions/{session_id}", tags=["Sessions"])
+async def delete_session_endpoint(
+    session_id: str,
+    current_user: AuthenticatedUser = Depends(get_authenticated_user),
+):
+    """Delete a session owned by the authenticated user."""
+    deleted = await delete_session(
+        current_user.user_id,
+        session_id=session_id,
+    )
+    if not deleted:
+        raise HTTPException(status_code=404, detail=f"Session '{session_id}' not found.")
+    return {"session_id": session_id, "deleted": True}
+
+
 @app.post("/sessions/{session_id}/research", tags=["Sessions"])
-async def session_research(session_id: str, body: ResearchRequest):
+async def session_research(
+    session_id: str,
+    body: ResearchRequest,
+    current_user: AuthenticatedUser = Depends(get_authenticated_user),
+):
     """Run research within a session and persist the run for follow-up."""
-    session = get_session(session_id)
+    session = await get_session(session_id, current_user.user_id)
     if session is None:
         raise HTTPException(status_code=404, detail=f"Session '{session_id}' not found.")
     run_id = generate_run_id()
     return StreamingResponse(
-        _stream_research(body.query, body.use_vector_store, session=session, run_id=run_id),
+        _stream_research(
+            body.query,
+            body.use_vector_store,
+            session=session,
+            run_id=run_id,
+            user_id=current_user.user_id,
+        ),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
@@ -308,9 +441,13 @@ async def session_research(session_id: str, body: ResearchRequest):
 
 
 @app.post("/sessions/{session_id}/followup", tags=["Sessions"])
-async def session_followup(session_id: str, body: FollowupRequest):
+async def session_followup(
+    session_id: str,
+    body: FollowupRequest,
+    current_user: AuthenticatedUser = Depends(get_authenticated_user),
+):
     """Ask a follow-up question grounded to a session's source material."""
-    session = get_session(session_id)
+    session = await get_session(session_id, current_user.user_id)
     if session is None:
         raise HTTPException(status_code=404, detail=f"Session '{session_id}' not found.")
 
@@ -333,7 +470,7 @@ async def session_followup(session_id: str, body: FollowupRequest):
         run_id = latest.run_id
 
     return StreamingResponse(
-        _stream_followup(session, body.question, run_id=run_id),
+        _stream_followup(session, current_user.user_id, body.question, run_id=run_id),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
