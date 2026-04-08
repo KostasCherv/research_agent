@@ -163,6 +163,44 @@ class SupabaseSessionStore:
             created_at=session_row.get("created_at", ""),
         )
 
+    async def update_session_title(
+        self,
+        *,
+        user_id: str,
+        session_id: str,
+        title: str,
+    ) -> bool:
+        response = await self._request(
+            "PATCH",
+            "research_sessions",
+            params={
+                "id": f"eq.{session_id}",
+                "user_id": f"eq.{user_id}",
+            },
+            json_body={"title": title},
+            extra_headers={"Prefer": "return=representation"},
+        )
+        rows = response.json()
+        return bool(rows)
+
+    async def delete_session(
+        self,
+        *,
+        user_id: str,
+        session_id: str,
+    ) -> bool:
+        response = await self._request(
+            "DELETE",
+            "research_sessions",
+            params={
+                "id": f"eq.{session_id}",
+                "user_id": f"eq.{user_id}",
+            },
+            extra_headers={"Prefer": "return=representation"},
+        )
+        rows = response.json()
+        return bool(rows)
+
     async def append_run(
         self,
         *,

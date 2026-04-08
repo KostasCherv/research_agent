@@ -22,6 +22,8 @@ from src.sessions import (
     generate_run_id,
     get_session,
     list_sessions,
+    delete_session,
+    update_session_title,
 )
 from src.tools.vector_store import VectorStoreManager
 from src.llm.factory import get_llm
@@ -62,6 +64,10 @@ class FollowupRequest(BaseModel):
 
 class CreateSessionRequest(BaseModel):
     query: str | None = None
+
+
+class UpdateSessionTitleRequest(BaseModel):
+    title: str
 
 
 class HealthResponse(BaseModel):
@@ -342,6 +348,44 @@ async def get_session_endpoint(
     if session is None:
         raise HTTPException(status_code=404, detail=f"Session '{session_id}' not found.")
     return session.to_dict()
+
+
+@app.patch("/sessions/{session_id}", tags=["Sessions"])
+async def update_session_title_endpoint(
+    session_id: str,
+    body: UpdateSessionTitleRequest,
+    current_user: AuthenticatedUser = Depends(get_authenticated_user),
+):
+    """Update a session title."""
+    title = " ".join(body.title.strip().split())
+    if not title:
+        raise HTTPException(status_code=400, detail="Session title cannot be empty.")
+    if len(title) > 120:
+        raise HTTPException(status_code=400, detail="Session title is too long.")
+
+    updated = await update_session_title(
+        current_user.user_id,
+        session_id=session_id,
+        title=title,
+    )
+    if not updated:
+        raise HTTPException(status_code=404, detail=f"Session '{session_id}' not found.")
+    return {"session_id": session_id, "title": title}
+
+
+@app.delete("/sessions/{session_id}", tags=["Sessions"])
+async def delete_session_endpoint(
+    session_id: str,
+    current_user: AuthenticatedUser = Depends(get_authenticated_user),
+):
+    """Delete a session owned by the authenticated user."""
+    deleted = await delete_session(
+        current_user.user_id,
+        session_id=session_id,
+    )
+    if not deleted:
+        raise HTTPException(status_code=404, detail=f"Session '{session_id}' not found.")
+    return {"session_id": session_id, "deleted": True}
 
 
 @app.post("/sessions/{session_id}/research", tags=["Sessions"])

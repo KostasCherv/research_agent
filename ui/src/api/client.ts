@@ -99,6 +99,39 @@ export async function listSessions(
   return (await response.json()) as { sessions: SessionSummary[] }
 }
 
+export async function updateSessionTitle(
+  sessionId: string,
+  title: string,
+  accessToken: string | null,
+): Promise<{ session_id: string; title: string }> {
+  const response = await fetch(`${API_BASE}/sessions/${sessionId}`, {
+    method: 'PATCH',
+    headers: {
+      'Content-Type': 'application/json',
+      ...authHeaders(accessToken),
+    },
+    body: JSON.stringify({ title }),
+  })
+  if (!response.ok) {
+    throw new Error(`Failed to rename session: ${response.status}`)
+  }
+  return (await response.json()) as { session_id: string; title: string }
+}
+
+export async function deleteSession(
+  sessionId: string,
+  accessToken: string | null,
+): Promise<{ session_id: string; deleted: boolean }> {
+  const response = await fetch(`${API_BASE}/sessions/${sessionId}`, {
+    method: 'DELETE',
+    headers: authHeaders(accessToken),
+  })
+  if (!response.ok) {
+    throw new Error(`Failed to delete session: ${response.status}`)
+  }
+  return (await response.json()) as { session_id: string; deleted: boolean }
+}
+
 type FollowupOptions = {
   signal?: AbortSignal
   onChunk: (text: string) => void

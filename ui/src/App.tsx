@@ -1,12 +1,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import type { MouseEvent } from 'react'
 import { AlertCircle, CheckCircle2, LoaderCircle } from 'lucide-react'
 import type { AuthChangeEvent, Session } from '@supabase/supabase-js'
 import {
   checkHealth,
   createSession,
+  deleteSession,
   getSession,
   listSessions,
   streamSessionResearch,
+  updateSessionTitle,
 } from './api/client'
 import { ChatForm } from './components/ChatForm'
 import { FollowupChat } from './components/FollowupChat'
@@ -37,6 +40,15 @@ function App() {
   const [runId, setRunId] = useState<string | null>(null)
   const [conversation, setConversation] = useState<ConversationTurn[]>([])
   const [userSessions, setUserSessions] = useState<SessionSummary[]>([])
+  const [renameSessionId, setRenameSessionId] = useState<string | null>(null)
+  const [renameTitleInput, setRenameTitleInput] = useState('')
+  const [isRenaming, setIsRenaming] = useState(false)
+  const [sessionMenu, setSessionMenu] = useState<{
+    sessionId: string
+    title: string
+    x: number
+    y: number
+  } | null>(null)
 
   const abortRef = useRef<AbortController | null>(null)
   const sessionsFetchInFlightRef = useRef(false)
@@ -130,6 +142,79 @@ function App() {
     },
     [authSession],
   )
+
+  const openRenameModal = useCallback((targetSessionId: string, currentTitle: string) => {
+    setSessionMenu(null)
+    setRenameSessionId(targetSessionId)
+    setRenameTitleInput(currentTitle)
+  }, [])
+
+  const closeRenameModal = useCallback(() => {
+    if (isRenaming) return
+    setRenameSessionId(null)
+    setRenameTitleInput('')
+  }, [isRenaming])
+
+  const handleRenameSession = useCallback(async () => {
+    if (!authSession?.access_token || !renameSessionId) return
+    const nextTitle = renameTitleInput.trim()
+    if (!nextTitle) {
+      setError('Session title cannot be empty.')
+      return
+    }
+    setIsRenaming(true)
+    try {
+      await updateSessionTitle(renameSessionId, nextTitle, authSession.access_token)
+      setUserSessions((prev) =>
+        prev.map((s) => (s.session_id === renameSessionId ? { ...s, title: nextTitle } : s)),
+      )
+      setRenameSessionId(null)
+      setRenameTitleInput('')
+      setError(null)
+    } catch (renameError) {
+      setError(renameError instanceof Error ? renameError.message : 'Failed to rename session.')
+    } finally {
+      setIsRenaming(false)
+    }
+  }, [authSession, renameSessionId, renameTitleInput])
+
+  const handleDeleteSession = useCallback(async () => {
+    if (!authSession?.access_token || !sessionMenu) return
+    const confirmed = window.confirm('Delete this session? This action cannot be undone.')
+    if (!confirmed) {
+      setSessionMenu(null)
+      return
+    }
+    try {
+      await deleteSession(sessionMenu.sessionId, authSession.access_token)
+      setUserSessions((prevSessions) =>
+        prevSessions.filter((session) => session.session_id !== sessionMenu.sessionId),
+      )
+      if (sessionId === sessionMenu.sessionId) {
+        setSessionId(null)
+        setRunId(null)
+        setConversation([])
+        setReport('')
+        setLastQuery('')
+        setEvents([])
+      }
+    } catch (deleteError) {
+      setError(deleteError instanceof Error ? deleteError.message : 'Failed to delete session.')
+    } finally {
+      setSessionMenu(null)
+    }
+  }, [authSession, sessionId, sessionMenu])
+
+  useEffect(() => {
+    if (!sessionMenu) return
+    const closeMenu = () => setSessionMenu(null)
+    window.addEventListener('click', closeMenu)
+    window.addEventListener('scroll', closeMenu, true)
+    return () => {
+      window.removeEventListener('click', closeMenu)
+      window.removeEventListener('scroll', closeMenu, true)
+    }
+  }, [sessionMenu])
 
   const handleSubmit = useCallback(
     async (query: string, useVectorStore: boolean) => {
@@ -279,6 +364,21 @@ function App() {
                       type="button"
                       className={`session-item ${sessionId === s.session_id ? 'is-active' : ''}`}
                       onClick={() => void openSession(s.session_id)}
+                      onDoubleClick={(event) => {
+                        event.preventDefault()
+                        event.stopPropagation()
+                        openRenameModal(s.session_id, s.title)
+                      }}
+                      onContextMenu={(event: MouseEvent<HTMLButtonElement>) => {
+                        event.preventDefault()
+                        event.stopPropagation()
+                        setSessionMenu({
+                          sessionId: s.session_id,
+                          title: s.title,
+                          x: event.clientX,
+                          y: event.clientY,
+                        })
+                      }}
                     >
                       <span className="session-item-id">{s.title}</span>
                       <span className="session-item-date">
@@ -309,6 +409,57 @@ function App() {
           conversation={conversation}
           onConversationUpdate={handleConversationUpdate}
         />
+      )}
+      {renameSessionId && (
+        <div className="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="rename-session-title">
+          <div className="glass-panel rename-modal">
+            <h3 id="rename-session-title">Rename session</h3>
+            <input
+              className="rename-input"
+              type="text"
+              value={renameTitleInput}
+              onChange={(event) => setRenameTitleInput(event.target.value)}
+              maxLength={120}
+              placeholder="Session title"
+              autoFocus
+            />
+            <div className="rename-actions">
+              <button type="button" className="auth-button" onClick={closeRenameModal} disabled={isRenaming}>
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="submit-button"
+                onClick={() => void handleRenameSession()}
+                disabled={isRenaming || !renameTitleInput.trim()}
+              >
+                {isRenaming ? 'Saving...' : 'Save'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {sessionMenu && (
+        <div
+          className="session-context-menu"
+          style={{ top: sessionMenu.y, left: sessionMenu.x }}
+          role="menu"
+        >
+          <button
+            type="button"
+            className="session-context-item"
+            onClick={() => openRenameModal(sessionMenu.sessionId, sessionMenu.title)}
+          >
+            Rename
+          </button>
+          <button
+            type="button"
+            className="session-context-item danger"
+            onClick={() => void handleDeleteSession()}
+          >
+            Delete
+          </button>
+        </div>
       )}
     </Layout>
   )

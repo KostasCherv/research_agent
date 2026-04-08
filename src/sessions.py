@@ -118,5 +118,22 @@ async def append_turn(user_id: str, session_id: str, turn: ConversationTurn) -> 
     await _get_store().append_turn(user_id=user_id, session_id=session_id, turn=turn)
 
 
+async def update_session_title(user_id: str, session_id: str, title: str) -> bool:
+    """Update a user-owned session title."""
+    return await _get_store().update_session_title(
+        user_id=user_id,
+        session_id=session_id,
+        title=title,
+    )
+
+
+async def delete_session(user_id: str, session_id: str) -> bool:
+    """Delete a user-owned session."""
+    return await _get_store().delete_session(
+        user_id=user_id,
+        session_id=session_id,
+    )
+
+
 def generate_run_id() -> str:
     return str(uuid.uuid4())
