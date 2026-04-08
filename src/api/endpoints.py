@@ -207,8 +207,8 @@ async def _stream_followup(
         f"Conversation so far:\n{history_block}\n\n"
         f"Retrieved source passages:\n{context_block}\n\n"
         f"Question: {question}\n\n"
-        f"Answer concisely and cite the source URLs inline using [Source N] notation. "
-        f"At the end, list the citations."
+        f"Answer concisely based on the retrieved passages. "
+        f"Do NOT append a citations list at the end — citations are handled separately."
     )
 
     llm = get_llm(temperature=0.2)
