@@ -20,7 +20,7 @@ def test_get_authenticated_user_rejects_missing_token():
 def test_get_authenticated_user_accepts_valid_jwt_payload():
     credentials = HTTPAuthorizationCredentials(
         scheme="Bearer",
-        credentials="eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ1c2VyLTEifQ.signature",
+        credentials="eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ1c2VyLTEifQ.c2ln",
     )
     mock_key = MagicMock()
     mock_key.key = "public-key"
@@ -59,3 +59,22 @@ def test_get_authenticated_user_rejects_invalid_jwt():
             assert exc.status_code == 401
         else:
             raise AssertionError("Expected HTTPException for invalid token")
+
+
+def test_get_authenticated_user_handles_jwks_client_error_with_fallback():
+    credentials = HTTPAuthorizationCredentials(
+        scheme="Bearer",
+        credentials="eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ1c2VyLTEifQ.bad-kid",
+    )
+    with (
+        patch("src.auth.jwt.PyJWKClient") as mock_jwk_client_cls,
+        patch("src.auth._verify_with_supabase_userinfo", return_value=MagicMock(user_id="user-1", email="u@example.com")) as mock_fallback,
+    ):
+        mock_jwk_client = MagicMock()
+        mock_jwk_client.get_signing_key_from_jwt.side_effect = jwt.PyJWKClientError("jwks unavailable")
+        mock_jwk_client_cls.return_value = mock_jwk_client
+
+        user = asyncio.run(get_authenticated_user(credentials))
+
+    assert user.user_id == "user-1"
+    mock_fallback.assert_called_once_with(credentials.credentials)

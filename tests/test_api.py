@@ -1,5 +1,6 @@
 """Tests for FastAPI endpoints (src/api/endpoints.py)"""
 
+import asyncio
 import json
 from unittest.mock import AsyncMock, MagicMock, patch
 from fastapi.testclient import TestClient
@@ -203,3 +204,13 @@ def test_session_endpoints_require_auth():
         assert create_resp.status_code == 401
     finally:
         app.dependency_overrides[get_authenticated_user] = _auth_override
+
+
+def test_startup_validation_does_not_fail_without_supabase_configuration():
+    with (
+        patch("src.api.endpoints.settings.supabase_url", ""),
+        patch("src.api.endpoints.settings.supabase_service_role_key", ""),
+        patch("src.api.endpoints.ensure_store_initialized") as mock_init,
+    ):
+        asyncio.run(app.router.on_startup[0]())
+        mock_init.assert_not_called()

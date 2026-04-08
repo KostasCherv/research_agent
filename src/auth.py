@@ -120,7 +120,9 @@ async def get_authenticated_user(
                 audience=settings.supabase_jwt_audience,
                 options={"require": ["exp", "sub"]},
             )
-        except jwt.InvalidTokenError:
+        except (jwt.InvalidTokenError, jwt.PyJWKClientError):
+            return await _verify_with_supabase_userinfo(token)
+        except Exception:
             return await _verify_with_supabase_userinfo(token)
 
     user_id = payload.get("sub")

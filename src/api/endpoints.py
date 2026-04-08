@@ -12,6 +12,7 @@ from pydantic import BaseModel
 from src.graph.graph import build_graph
 from src.errors import ResearchAgentError
 from src.observability import end_workflow_run, start_workflow_run
+from src.config import settings
 from src.auth import AuthenticatedUser, get_authenticated_user
 from src.sessions import (
     Session,
@@ -51,7 +52,23 @@ app.add_middleware(
 
 @app.on_event("startup")
 async def validate_session_store_configuration() -> None:
-    """Validate required Supabase session store configuration at startup."""
+    """Warn when session persistence is unavailable, but keep API bootable."""
+    has_url = bool(settings.supabase_url)
+    has_key = bool(settings.supabase_service_role_key)
+
+    if not has_url and not has_key:
+        logger.info(
+            "[startup] Supabase session persistence is disabled; non-session routes remain available."
+        )
+        return
+
+    if not has_url or not has_key:
+        logger.warning(
+            "[startup] Supabase session persistence is partially configured; "
+            "session endpoints may fail until SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are both set."
+        )
+        return
+
     ensure_store_initialized()
 
 
