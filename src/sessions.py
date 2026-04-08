@@ -80,6 +80,11 @@ def _get_store() -> SupabaseSessionStore:
     return _store
 
 
+def ensure_store_initialized() -> None:
+    """Fail fast at startup if Supabase persistence is misconfigured."""
+    _get_store()
+
+
 def suggest_session_title(query: str | None) -> str:
     """Generate a short human-friendly session title from a query."""
     if not query:

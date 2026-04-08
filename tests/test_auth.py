@@ -1,3 +1,4 @@
+import asyncio
 from unittest.mock import MagicMock, patch
 
 import jwt
@@ -9,7 +10,7 @@ from src.auth import get_authenticated_user
 
 def test_get_authenticated_user_rejects_missing_token():
     try:
-        get_authenticated_user(None)
+        asyncio.run(get_authenticated_user(None))
     except HTTPException as exc:
         assert exc.status_code == 401
     else:
@@ -30,7 +31,7 @@ def test_get_authenticated_user_accepts_valid_jwt_payload():
         mock_jwk_client_cls.return_value = mock_jwk_client
         mock_decode.return_value = {"sub": "user-1", "email": "user@example.com"}
 
-        user = get_authenticated_user(credentials)
+        user = asyncio.run(get_authenticated_user(credentials))
 
     assert user.user_id == "user-1"
     assert user.email == "user@example.com"
@@ -44,7 +45,7 @@ def test_get_authenticated_user_rejects_invalid_jwt():
         mock_jwk_client_cls.return_value = mock_jwk_client
 
         try:
-            get_authenticated_user(credentials)
+            asyncio.run(get_authenticated_user(credentials))
         except HTTPException as exc:
             assert exc.status_code == 401
         else:

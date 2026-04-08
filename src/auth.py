@@ -27,7 +27,7 @@ def _jwks_url() -> str:
     return ""
 
 
-def _verify_with_supabase_userinfo(token: str) -> AuthenticatedUser:
+async def _verify_with_supabase_userinfo(token: str) -> AuthenticatedUser:
     """Validate token against Supabase Auth API and return user claims."""
     if not settings.supabase_url:
         raise HTTPException(
@@ -37,8 +37,8 @@ def _verify_with_supabase_userinfo(token: str) -> AuthenticatedUser:
 
     apikey = settings.supabase_service_role_key or ""
     try:
-        with httpx.Client(timeout=8.0) as client:
-            response = client.get(
+        async with httpx.AsyncClient(timeout=8.0) as client:
+            response = await client.get(
                 f"{settings.supabase_url.rstrip('/')}/auth/v1/user",
                 headers={
                     "Authorization": f"Bearer {token}",
@@ -67,7 +67,7 @@ def _verify_with_supabase_userinfo(token: str) -> AuthenticatedUser:
     return AuthenticatedUser(user_id=user_id, email=data.get("email"))
 
 
-def get_authenticated_user(
+async def get_authenticated_user(
     credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
 ) -> AuthenticatedUser:
     """Validate bearer token and return authenticated user claims."""
@@ -106,9 +106,9 @@ def get_authenticated_user(
                     options={"require": ["exp", "sub"]},
                 )
             except jwt.InvalidTokenError:
-                return _verify_with_supabase_userinfo(token)
+                return await _verify_with_supabase_userinfo(token)
         else:
-            return _verify_with_supabase_userinfo(token)
+            return await _verify_with_supabase_userinfo(token)
     else:
         try:
             jwk_client = jwt.PyJWKClient(jwks_url)
@@ -121,7 +121,7 @@ def get_authenticated_user(
                 options={"require": ["exp", "sub"]},
             )
         except jwt.InvalidTokenError:
-            return _verify_with_supabase_userinfo(token)
+            return await _verify_with_supabase_userinfo(token)
 
     user_id = payload.get("sub")
     if not user_id:

@@ -24,6 +24,7 @@ from src.sessions import (
     list_sessions,
     delete_session,
     update_session_title,
+    ensure_store_initialized,
 )
 from src.tools.vector_store import VectorStoreManager
 from src.llm.factory import get_llm
@@ -46,6 +47,12 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.on_event("startup")
+async def validate_session_store_configuration() -> None:
+    """Validate required Supabase session store configuration at startup."""
+    ensure_store_initialized()
 
 
 # ---------------------------------------------------------------------------
