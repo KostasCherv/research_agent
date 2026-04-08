@@ -29,12 +29,6 @@ class Settings(BaseSettings):
     api_host: str = Field(default="0.0.0.0")
     api_port: int = Field(default=8000)
 
-    # Feature flags
-    enable_sessions: bool = Field(
-        default=True,
-        description="Enable research sessions with follow-up questions.",
-    )
-
     # Observability (LangSmith)
     langsmith_tracing: bool = Field(
         default=False,

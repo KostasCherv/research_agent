@@ -222,7 +222,6 @@ You get full observability from input to final report: where time is spent, wher
 | `TAVILY_API_KEY` | — | Required for web search |
 | `CHROMA_PERSIST_DIRECTORY` | `./chroma_db` | ChromaDB storage path |
 | `MAX_SEARCH_RESULTS` | `5` | Number of Tavily results |
-| `ENABLE_SESSIONS` | `true` | Enable research sessions and follow-up chat |
 | `LANGSMITH_TRACING` | `false` | Enable LangSmith tracing (`true`/`false`) |
 | `LANGSMITH_PROJECT` | `research-agent` | LangSmith project name |
 | `LANGSMITH_API_KEY` | — | LangSmith API key |
