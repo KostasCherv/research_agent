@@ -48,6 +48,9 @@ Each node is a pure function that receives and returns a `ResearchState` TypedDi
 | Streaming API | FastAPI SSE endpoint for real-time progress |
 | CLI | Typer + Rich for beautiful terminal output |
 | Vector storage | ChromaDB for persisting and searching reports |
+| Research sessions | Server-side session store tracks conversation history and run metadata |
+| Follow-up chat | ChatGPT-style chat grounded to the same sources as the research report |
+| Per-run source chunks | Source passages are chunked, stored, and retrieved per run for grounded answers |
 | LangSmith observability | Full workflow tracing: root runs, node spans, external calls, and failure context |
 
 ## Quick Start
@@ -95,6 +98,7 @@ The `ui/` app provides a browser interface for:
 - entering research queries
 - streaming node-by-node progress from the backend
 - rendering the final markdown report
+- follow-up chat grounded to the same sources (ChatGPT-style, requires sessions)
 
 Install and run:
 
@@ -129,12 +133,15 @@ npm run dev
 
 ```mermaid
 flowchart LR
-    browser["Browser UI (React/Vite)"] -->|"POST /research (SSE)"| api["FastAPI API"]
+    browser["Browser UI (React/Vite)"] -->|"POST /sessions (create)"| api["FastAPI API"]
+    browser -->|"POST /sessions/{id}/research (SSE)"| api
     api --> pipelineFlow["LangGraph pipeline"]
     pipelineFlow --> reportOut["Markdown report"]
     pipelineFlow --> memorySearch["Chroma memory search (memory_context)"]
-    reportOut -->|"if enabled"| chromaPersist["Chroma report persist"]
+    reportOut -->|"if enabled"| chromaPersist["Chroma source chunks persist"]
     reportOut --> browser
+    browser -->|"POST /sessions/{id}/followup (SSE)"| api
+    api -->|"search run sources"| chromaPersist
 ```
 
 ## API
@@ -148,9 +155,13 @@ python -m src.main serve
 | Endpoint | Method | Description |
 |---|---|---|
 | `/health` | `GET` | Liveness probe |
-| `/research` | `POST` | Run pipeline with SSE streaming |
+| `/research` | `POST` | Run pipeline with SSE streaming (sessionless) |
+| `/sessions` | `POST` | Create a new research session |
+| `/sessions/{id}` | `GET` | Get session state and conversation history |
+| `/sessions/{id}/research` | `POST` | Run pipeline within a session (SSE); returns `X-Run-Id` header |
+| `/sessions/{id}/followup` | `POST` | Ask a follow-up question grounded to a run's sources (SSE) |
 
-Example SSE request:
+Example — sessionless research:
 
 ```bash
 curl -N -X POST http://localhost:8000/research \
@@ -158,12 +169,33 @@ curl -N -X POST http://localhost:8000/research \
   -d '{"query": "What is LangGraph?", "use_vector_store": false}'
 ```
 
-Each event:
+Example — session-based research + follow-up:
+
+```bash
+# 1. Create session
+SESSION=$(curl -s -X POST http://localhost:8000/sessions | jq -r '.session_id')
+
+# 2. Run research (note X-Run-Id response header)
+curl -N -X POST http://localhost:8000/sessions/$SESSION/research \
+  -H "Content-Type: application/json" \
+  -D - \
+  -d '{"query": "What is LangGraph?", "use_vector_store": true}'
+
+# 3. Ask a follow-up (uses the latest run by default)
+curl -N -X POST http://localhost:8000/sessions/$SESSION/followup \
+  -H "Content-Type: application/json" \
+  -d '{"question": "Can it work without LangChain?"}'
+```
+
+SSE event types:
 
 ```json
-{"node": "search_node", "data": {}}
-{"node": "report_node", "data": {"report": "# Report ..."}}
-{"node": "__end__", "data": {}}
+{"type": "node",      "node": "search",  "status": "running"}
+{"type": "node",      "node": "report",  "status": "completed", "data": {"report": "# Report ..."}}
+{"type": "chunk",     "text": "token..."}
+{"type": "citations", "citations": [{"source_url": "...", "source_title": "..."}]}
+{"type": "done"}
+{"type": "error",     "error": "message"}
 ```
 
 ## LangSmith Observability
@@ -216,9 +248,10 @@ mypy src
 
 ```
 src/
-├── config.py           # Pydantic-settings config
+├── config.py           # Pydantic-settings config (feature flags, env vars)
 ├── errors.py           # Custom exceptions
 ├── main.py             # Typer CLI
+├── sessions.py         # In-memory session store (Session, SessionRun, ConversationTurn)
 ├── llm/factory.py      # LLM factory (OpenAI / Ollama)
 ├── graph/
 │   ├── state.py        # ResearchState TypedDict
@@ -228,14 +261,16 @@ src/
 ├── tools/
 │   ├── search.py       # Tavily + retry
 │   ├── fetcher.py      # Async URL fetcher
-│   └── vector_store.py # ChromaDB manager
-└── api/endpoints.py    # FastAPI + SSE
+│   └── vector_store.py # ChromaDB manager (reports + per-run source chunks)
+└── api/endpoints.py    # FastAPI + SSE (research, sessions, follow-up)
 ui/
 ├── src/
-│   ├── App.tsx                 # Main UI shell/state
-│   ├── api/client.ts           # Health + SSE stream client
-│   ├── components/ChatForm.tsx # Query input form
+│   ├── App.tsx                       # Main UI shell — session lifecycle, state
+│   ├── types.ts                      # Shared TypeScript types
+│   ├── api/client.ts                 # SSE client (research, sessions, follow-up)
+│   ├── components/ChatForm.tsx       # Query input form
 │   ├── components/ResearchProgress.tsx
-│   └── components/ReportViewer.tsx
-└── package.json                # Vite scripts and deps
+│   ├── components/ReportViewer.tsx
+│   └── components/FollowupChat.tsx   # ChatGPT-style follow-up chat
+└── package.json                      # Vite scripts and deps
 ```
