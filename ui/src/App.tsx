@@ -4,8 +4,12 @@ import { checkHealth, streamResearch } from './api/client'
 import { ChatForm } from './components/ChatForm'
 import { Layout } from './components/Layout'
 import { ReportViewer } from './components/ReportViewer'
+import { ResearchGraph } from './components/ResearchGraph'
 import { ResearchProgress } from './components/ResearchProgress'
-import type { HealthResponse, ResearchStreamEvent } from './types'
+import { initialGraphState, applyEvents } from './lib/graphEventReducer'
+import type { GraphState, HealthResponse, ResearchStreamEvent } from './types'
+
+const BATCH_INTERVAL_MS = 100
 
 type HealthState = 'loading' | 'online' | 'offline'
 
@@ -16,7 +20,25 @@ function App() {
   const [report, setReport] = useState('')
   const [lastQuery, setLastQuery] = useState('')
   const [error, setError] = useState<string | null>(null)
+  const [graphState, setGraphState] = useState<GraphState>(initialGraphState())
+
+  // Batch pending graph events to avoid per-node re-renders
+  const pendingGraphEvents = useRef<ResearchStreamEvent[]>([])
+  const batchTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+
   const abortRef = useRef<AbortController | null>(null)
+
+  const scheduleGraphUpdate = useCallback((event: ResearchStreamEvent) => {
+    pendingGraphEvents.current.push(event)
+    if (batchTimer.current === null) {
+      batchTimer.current = setTimeout(() => {
+        const batch = pendingGraphEvents.current
+        pendingGraphEvents.current = []
+        batchTimer.current = null
+        setGraphState((prev) => applyEvents(prev, batch))
+      }, BATCH_INTERVAL_MS)
+    }
+  }, [])
 
   const loadHealth = useCallback(async () => {
     try {
@@ -34,6 +56,9 @@ function App() {
   useEffect(() => {
     return () => {
       abortRef.current?.abort()
+      if (batchTimer.current !== null) {
+        clearTimeout(batchTimer.current)
+      }
     }
   }, [])
 
@@ -49,10 +74,17 @@ function App() {
       const controller = new AbortController()
       abortRef.current = controller
 
+      // Reset all state for new run
       setError(null)
       setReport('')
       setLastQuery(normalizedQuery)
       setEvents([])
+      setGraphState(initialGraphState())
+      pendingGraphEvents.current = []
+      if (batchTimer.current !== null) {
+        clearTimeout(batchTimer.current)
+        batchTimer.current = null
+      }
       setIsStreaming(true)
 
       try {
@@ -62,6 +94,7 @@ function App() {
             signal: controller.signal,
             onEvent: (event) => {
               setEvents((prev) => [...prev, event])
+              scheduleGraphUpdate(event)
               if (event.data.report) {
                 setReport(event.data.report)
               }
@@ -90,7 +123,7 @@ function App() {
         }
       }
     },
-    [],
+    [scheduleGraphUpdate],
   )
 
   const healthIndicator = useMemo(() => {
@@ -119,7 +152,20 @@ function App() {
       status={healthIndicator}
     >
       <ChatForm onSubmit={handleSubmit} disabled={isStreaming} />
-      <ResearchProgress events={events} isStreaming={isStreaming} />
+
+      {/* Graph: visible on medium+ screens */}
+      <div className="graph-panel-desktop">
+        <section className="glass-panel card-spacing">
+          <h2>Pipeline</h2>
+          <ResearchGraph graphState={graphState} />
+        </section>
+      </div>
+
+      {/* Progress list: mobile fallback */}
+      <div className="progress-panel-mobile">
+        <ResearchProgress events={events} isStreaming={isStreaming} />
+      </div>
+
       <ReportViewer
         report={report}
         query={lastQuery}

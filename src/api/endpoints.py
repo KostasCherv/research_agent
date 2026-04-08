@@ -2,6 +2,8 @@
 
 import json
 import logging
+import time
+from datetime import datetime, UTC
 from typing import AsyncGenerator
 
 from fastapi import FastAPI, HTTPException, Request
@@ -81,13 +83,34 @@ async def _stream_research(query: str, use_vector_store: bool) -> AsyncGenerator
         use_vector_store=use_vector_store,
     ) as trace_ctx:
         final_node_state: dict | None = None
+        workflow_start = time.monotonic()
+        last_node_start = workflow_start
         try:
             async for event in graph.astream(initial_state):
                 for node_name, node_state in event.items():
                     final_node_state = node_state
-                    payload = {
+                    now = time.monotonic()
+                    duration_ms = int((now - last_node_start) * 1000)
+                    last_node_start = now
+
+                    is_failed = bool(node_state.get("error"))
+                    node_status = "failed" if is_failed else "completed"
+
+                    # Lightweight metrics — only include fields that are present
+                    metrics: dict[str, object] = {"duration_ms": duration_ms}
+                    if "search_results" in node_state:
+                        metrics["result_count"] = len(node_state.get("search_results") or [])
+                    if "summaries" in node_state:
+                        metrics["summary_count"] = len(node_state.get("summaries") or [])
+                    if "retrieved_contents" in node_state:
+                        metrics["retrieved_count"] = len(node_state.get("retrieved_contents") or [])
+
+                    payload: dict[str, object] = {
                         "workflow_id": trace_ctx.workflow_id,
                         "node": node_name,
+                        "node_status": node_status,
+                        "ts": datetime.now(UTC).isoformat(),
+                        "metrics": metrics,
                         "data": {
                             k: v
                             for k, v in node_state.items()
