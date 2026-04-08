@@ -94,6 +94,26 @@ export async function streamFollowup(
   const decoder = new TextDecoder('utf-8')
   let buffer = ''
 
+  const handleFollowupEvent = (parsed: FollowupStreamEvent): boolean => {
+    if (parsed.type === 'chunk') {
+      options.onChunk(parsed.text)
+      return false
+    }
+    if (parsed.type === 'citations') {
+      options.onCitations(parsed.citations)
+      return false
+    }
+    if (parsed.type === 'done') {
+      options.onDone()
+      return true
+    }
+    if (parsed.type === 'error') {
+      options.onError?.(parsed.error)
+      return true
+    }
+    return false
+  }
+
   while (true) {
     const { value, done } = await reader.read()
     if (done) break
@@ -110,22 +130,30 @@ export async function streamFollowup(
       } catch {
         continue
       }
-
-      if (parsed.type === 'chunk') {
-        options.onChunk(parsed.text)
-      } else if (parsed.type === 'citations') {
-        options.onCitations(parsed.citations)
-      } else if (parsed.type === 'done') {
-        options.onDone()
-        return
-      } else if (parsed.type === 'error') {
-        options.onError?.(parsed.error)
+      if (handleFollowupEvent(parsed)) {
         return
       }
     }
   }
 
-  options.onDone()
+  if (buffer.trim()) {
+    const dataLine = buffer
+      .split('\n')
+      .map((line) => line.trim())
+      .find((line) => line.startsWith('data:'))
+    if (dataLine) {
+      try {
+        const parsed = JSON.parse(dataLine.replace(/^data:\s?/, '')) as FollowupStreamEvent
+        if (handleFollowupEvent(parsed)) {
+          return
+        }
+      } catch {
+        // Ignore trailing partial event and report abnormal termination below.
+      }
+    }
+  }
+
+  options.onError?.('Follow-up stream ended before a terminal event was received.')
 }
 
 export async function streamSessionResearch(
