@@ -32,6 +32,7 @@ def test_research_streams_events():
         patch("src.graph.nodes.asyncio.run", side_effect=_mock_asyncio_run),
         patch("src.graph.nodes.get_llm", return_value=mock_llm),
         patch("src.graph.nodes.VectorStoreManager"),
+        patch("src.config.settings.enable_structured_report_v2", False),
     ):
         response = client.post(
             "/research",
@@ -54,3 +55,57 @@ def test_research_streams_events():
 def test_research_bad_request_returns_422():
     response = client.post("/research", json={})  # missing 'query'
     assert response.status_code == 422
+
+
+def test_research_sse_includes_structured_fields_when_present():
+    from src.llm.output_parsers import StructuredReportV2, Claim, SourceAssessment
+
+    structured = StructuredReportV2(
+        title="Test Report",
+        executive_summary="Summary.",
+        claims=[
+            Claim(id="c1", text="Claim one.", confidence=0.8, evidence_source_urls=["https://example.com"], evidence_quote=""),
+            Claim(id="c2", text="Low confidence.", confidence=0.3, evidence_source_urls=[], evidence_quote=""),
+        ],
+        conclusion="Done.",
+        source_assessments=[
+            SourceAssessment(url="https://example.com", reliability_score=0.7, bias_flags=[], freshness_days=None)
+        ],
+    )
+
+    search_result = [{"url": "https://example.com", "title": "Example", "content": "Test"}]
+    mock_llm = MagicMock()
+    mock_structured_llm = MagicMock()
+    mock_structured_llm.invoke.return_value = structured
+    mock_llm.with_structured_output.return_value = mock_structured_llm
+    mock_llm.invoke.return_value = MagicMock(content="LLM output text.")
+
+    with (
+        patch("src.graph.nodes.perform_search", return_value=search_result),
+        patch("src.graph.nodes.asyncio.run", side_effect=_mock_asyncio_run),
+        patch("src.graph.nodes.get_llm", return_value=mock_llm),
+        patch("src.graph.nodes.VectorStoreManager"),
+        patch("src.config.settings.enable_structured_report_v2", True),
+    ):
+        response = client.post(
+            "/research",
+            json={"query": "What is LangGraph?", "use_vector_store": False},
+        )
+
+    assert response.status_code == 200
+
+    events = [
+        json.loads(line[6:])
+        for line in response.text.splitlines()
+        if line.startswith("data: ")
+    ]
+
+    # Find the report node event
+    report_events = [e for e in events if e.get("data", {}).get("structured_report")]
+    assert len(report_events) >= 1, "No event with structured_report found"
+
+    data = report_events[0]["data"]
+    assert data["claims_count"] == 2
+    assert data["low_confidence_claims_count"] == 1
+    # Old key still present for backward compat
+    assert "report" in data

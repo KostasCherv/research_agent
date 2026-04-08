@@ -85,6 +85,10 @@ async def _stream_research(query: str, use_vector_store: bool) -> AsyncGenerator
             async for event in graph.astream(initial_state):
                 for node_name, node_state in event.items():
                     final_node_state = node_state
+                    claims: list[dict] = node_state.get("claims") or []
+                    low_confidence_count = sum(
+                        1 for c in claims if c.get("confidence", 1.0) < 0.5
+                    )
                     payload = {
                         "workflow_id": trace_ctx.workflow_id,
                         "node": node_name,
@@ -94,6 +98,12 @@ async def _stream_research(query: str, use_vector_store: bool) -> AsyncGenerator
                             if k in {"error", "report", "combined_insights"}
                         },
                     }
+                    # Enrich with structured report fields (backward-compatible additions)
+                    if "structured_report" in node_state and node_state["structured_report"]:
+                        payload["data"]["structured_report"] = node_state["structured_report"]
+                    if claims:
+                        payload["data"]["claims_count"] = len(claims)
+                        payload["data"]["low_confidence_claims_count"] = low_confidence_count
                     yield f"data: {json.dumps(payload)}\n\n"
 
             end_workflow_run(

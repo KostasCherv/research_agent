@@ -29,6 +29,11 @@ class ResearchState(TypedDict, total=False):
     report: str                     # Final markdown report
     report_metadata: dict           # {title, sources, generated_at}
 
+    # Structured report v2 output
+    structured_report: dict         # StructuredReportV2 serialized as dict
+    claims: list[dict]              # List of Claim dicts
+    source_assessments: list[dict]  # List of SourceAssessment dicts
+
     # Control flow
     error: str | None               # Set on unrecoverable errors
     use_vector_store: bool          # Whether to persist to Chroma

@@ -29,6 +29,12 @@ class Settings(BaseSettings):
     api_host: str = Field(default="0.0.0.0")
     api_port: int = Field(default=8000)
 
+    # Feature flags
+    enable_structured_report_v2: bool = Field(
+        default=True,
+        description="Use claim-centric structured output with confidence scores and citations.",
+    )
+
     # Observability (LangSmith)
     langsmith_tracing: bool = Field(
         default=False,

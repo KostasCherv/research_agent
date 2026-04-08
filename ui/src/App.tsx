@@ -5,7 +5,7 @@ import { ChatForm } from './components/ChatForm'
 import { Layout } from './components/Layout'
 import { ReportViewer } from './components/ReportViewer'
 import { ResearchProgress } from './components/ResearchProgress'
-import type { HealthResponse, ResearchStreamEvent } from './types'
+import type { HealthResponse, ResearchStreamEvent, StructuredReportV2 } from './types'
 
 type HealthState = 'loading' | 'online' | 'offline'
 
@@ -14,6 +14,7 @@ function App() {
   const [isStreaming, setIsStreaming] = useState(false)
   const [events, setEvents] = useState<ResearchStreamEvent[]>([])
   const [report, setReport] = useState('')
+  const [structuredReport, setStructuredReport] = useState<StructuredReportV2 | undefined>(undefined)
   const [lastQuery, setLastQuery] = useState('')
   const [error, setError] = useState<string | null>(null)
   const abortRef = useRef<AbortController | null>(null)
@@ -51,6 +52,7 @@ function App() {
 
       setError(null)
       setReport('')
+      setStructuredReport(undefined)
       setLastQuery(normalizedQuery)
       setEvents([])
       setIsStreaming(true)
@@ -64,6 +66,9 @@ function App() {
               setEvents((prev) => [...prev, event])
               if (event.data.report) {
                 setReport(event.data.report)
+              }
+              if (event.data.structured_report) {
+                setStructuredReport(event.data.structured_report)
               }
               if (event.node === '__error__') {
                 setError(event.data.error ?? 'Research failed unexpectedly.')
@@ -125,6 +130,7 @@ function App() {
         query={lastQuery}
         isStreaming={isStreaming}
         error={error}
+        structuredReport={structuredReport}
       />
     </Layout>
   )

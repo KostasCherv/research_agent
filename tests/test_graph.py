@@ -50,6 +50,7 @@ def test_graph_invoke_happy_path(monkeypatch):
         patch("src.graph.nodes.asyncio.run", side_effect=_mock_asyncio_run),
         patch("src.graph.nodes.get_llm", return_value=mock_llm),
         patch("src.graph.nodes.VectorStoreManager"),
+        patch("src.config.settings.enable_structured_report_v2", False),
     ):
         from src.graph.graph import build_graph
         graph = build_graph()
@@ -57,6 +58,41 @@ def test_graph_invoke_happy_path(monkeypatch):
 
     assert "report" in final
     assert len(final["report"]) > 0
+
+
+def test_graph_invoke_happy_path_produces_structured_report():
+    from src.llm.output_parsers import StructuredReportV2, Claim, SourceAssessment
+
+    structured = StructuredReportV2(
+        title="Test",
+        executive_summary="Summary.",
+        claims=[Claim(id="c1", text="A claim.", confidence=0.8, evidence_source_urls=[], evidence_quote="")],
+        conclusion="Done.",
+        source_assessments=[],
+    )
+
+    mock_llm = MagicMock()
+    mock_structured_llm = MagicMock()
+    mock_structured_llm.invoke.return_value = structured
+    mock_llm.with_structured_output.return_value = mock_structured_llm
+    mock_llm.invoke.return_value = MagicMock(content="Mock LLM output.")
+
+    search_result = [{"url": "https://example.com", "title": "Example", "content": "Content"}]
+
+    with (
+        patch("src.graph.nodes.perform_search", return_value=search_result),
+        patch("src.graph.nodes.asyncio.run", side_effect=_mock_asyncio_run),
+        patch("src.graph.nodes.get_llm", return_value=mock_llm),
+        patch("src.graph.nodes.VectorStoreManager"),
+        patch("src.config.settings.enable_structured_report_v2", True),
+    ):
+        from src.graph.graph import build_graph
+        graph = build_graph()
+        final = graph.invoke({"query": "LangGraph", "use_vector_store": False, "error": None})
+
+    assert "structured_report" in final
+    assert "claims" in final
+    assert len(final["claims"]) == 1
 
 
 def test_graph_invoke_continues_when_memory_lookup_fails():
@@ -70,6 +106,7 @@ def test_graph_invoke_continues_when_memory_lookup_fails():
         patch("src.graph.nodes.asyncio.run", side_effect=_mock_asyncio_run),
         patch("src.graph.nodes.get_llm", return_value=mock_llm),
         patch("src.graph.nodes.VectorStoreManager") as mock_vs_cls,
+        patch("src.config.settings.enable_structured_report_v2", False),
     ):
         mock_vs = MagicMock()
         mock_vs.search_reports.side_effect = RuntimeError("chroma unavailable")

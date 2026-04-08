@@ -109,7 +109,10 @@ def test_report_node_generates_report():
     mock_llm = MagicMock()
     mock_llm.invoke.return_value = MagicMock(content="# My Report\nContent here.")
 
-    with patch("src.graph.nodes.get_llm", return_value=mock_llm):
+    with (
+        patch("src.graph.nodes.get_llm", return_value=mock_llm),
+        patch("src.config.settings.enable_structured_report_v2", False),
+    ):
         from src.graph.nodes import report_node
         state = report_node({
             "query": "LangGraph",
@@ -195,3 +198,139 @@ def test_memory_context_node_handles_lookup_failure():
         state = memory_context_node({"query": "LangGraph"})
 
     assert state["memory_context"] == ""
+
+
+# ---------------------------------------------------------------------------
+# report_node — structured output v2
+# ---------------------------------------------------------------------------
+
+def _make_structured_report():
+    from src.llm.output_parsers import StructuredReportV2, Claim, SourceAssessment
+    return StructuredReportV2(
+        title="LangGraph Report",
+        executive_summary="LangGraph is a library for building stateful LLM applications.",
+        claims=[
+            Claim(
+                id="claim-1",
+                text="LangGraph supports stateful multi-agent workflows.",
+                confidence=0.9,
+                evidence_source_urls=["https://example.com"],
+                evidence_quote="LangGraph enables stateful agents.",
+            ),
+            Claim(
+                id="claim-2",
+                text="LangGraph has limited community adoption.",
+                confidence=0.3,
+                evidence_source_urls=["https://example2.com"],
+                evidence_quote="",
+            ),
+        ],
+        conclusion="LangGraph is a promising but evolving framework.",
+        source_assessments=[
+            SourceAssessment(
+                url="https://example.com",
+                reliability_score=0.8,
+                bias_flags=[],
+                freshness_days=30,
+            )
+        ],
+    )
+
+
+def test_report_node_v2_returns_structured_report():
+    structured = _make_structured_report()
+    mock_llm = MagicMock()
+    mock_structured_llm = MagicMock()
+    mock_structured_llm.invoke.return_value = structured
+    mock_llm.with_structured_output.return_value = mock_structured_llm
+
+    with (
+        patch("src.graph.nodes.get_llm", return_value=mock_llm),
+        patch("src.config.settings.enable_structured_report_v2", True),
+    ):
+        from src.graph.nodes import report_node
+        state = report_node({
+            "query": "LangGraph",
+            "combined_insights": "LangGraph synthesis text.",
+            "summaries": [{"url": "https://example.com", "title": "Example", "summary": "x"}],
+        })
+
+    assert "structured_report" in state
+    assert state["structured_report"]["title"] == "LangGraph Report"
+    assert len(state["claims"]) == 2
+    assert state["claims"][0]["confidence"] == 0.9
+    assert len(state["source_assessments"]) == 1
+    assert "report" in state
+    assert "⚠️ Low confidence" in state["report"]  # claim-2 is low confidence
+
+
+def test_report_node_v2_confidence_range():
+    structured = _make_structured_report()
+    for claim in structured.claims:
+        assert 0.0 <= claim.confidence <= 1.0
+    for sa in structured.source_assessments:
+        assert 0.0 <= sa.reliability_score <= 1.0
+
+
+def test_report_node_v2_retry_on_first_failure():
+    structured = _make_structured_report()
+    mock_llm = MagicMock()
+    mock_structured_llm = MagicMock()
+    # First call raises, second succeeds
+    mock_structured_llm.invoke.side_effect = [RuntimeError("parse error"), structured]
+    mock_llm.with_structured_output.return_value = mock_structured_llm
+
+    with (
+        patch("src.graph.nodes.get_llm", return_value=mock_llm),
+        patch("src.config.settings.enable_structured_report_v2", True),
+    ):
+        from src.graph.nodes import report_node
+        state = report_node({
+            "query": "LangGraph",
+            "combined_insights": "text",
+            "summaries": [],
+        })
+
+    assert "structured_report" in state
+    assert mock_structured_llm.invoke.call_count == 2
+
+
+def test_report_node_v2_error_after_two_failures():
+    mock_llm = MagicMock()
+    mock_structured_llm = MagicMock()
+    mock_structured_llm.invoke.side_effect = RuntimeError("always fails")
+    mock_llm.with_structured_output.return_value = mock_structured_llm
+
+    with (
+        patch("src.graph.nodes.get_llm", return_value=mock_llm),
+        patch("src.config.settings.enable_structured_report_v2", True),
+    ):
+        from src.graph.nodes import report_node
+        state = report_node({
+            "query": "LangGraph",
+            "combined_insights": "text",
+            "summaries": [],
+        })
+
+    assert state.get("error") is not None
+    assert "structured output" in state["error"]
+    assert mock_structured_llm.invoke.call_count == 2
+
+
+def test_report_node_v1_fallback_when_flag_disabled():
+    mock_llm = MagicMock()
+    mock_llm.invoke.return_value = MagicMock(content="# Prose Report\nContent.")
+
+    with (
+        patch("src.graph.nodes.get_llm", return_value=mock_llm),
+        patch("src.config.settings.enable_structured_report_v2", False),
+    ):
+        from src.graph.nodes import report_node
+        state = report_node({
+            "query": "LangGraph",
+            "combined_insights": "text",
+            "summaries": [{"url": "https://a.com", "title": "A", "summary": "x"}],
+        })
+
+    assert "# Prose Report" in state["report"]
+    assert "structured_report" not in state

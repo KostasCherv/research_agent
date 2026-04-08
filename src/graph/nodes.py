@@ -4,8 +4,11 @@ import asyncio
 import logging
 from datetime import datetime, UTC
 
+from pydantic import ValidationError
+
 from src.graph.state import ResearchState
 from src.llm.factory import get_llm
+from src.llm.output_parsers import StructuredReportV2
 from src.observability.context import build_trace_metadata, build_trace_tags
 from src.observability.langsmith import start_step_span
 from src.tools.search import perform_search
@@ -205,8 +208,10 @@ def combine_node(state: ResearchState) -> ResearchState:
         prompt = (
             f"You are a research analyst. Given the following source summaries for the query "
             f"'{query}', write a comprehensive and well-structured synthesis of the key insights "
-            f"(3–6 paragraphs). Do not repeat the same point from multiple sources; instead merge "
-            f"and reconcile them.\n\n{summaries_text}\n\n"
+            f"(3–6 paragraphs). Identify the most important discrete claims found across sources, "
+            f"noting where sources agree or disagree. Do not repeat the same point from multiple "
+            f"sources; instead merge and reconcile them. For each key claim, indicate which source "
+            f"URLs support it.\n\n{summaries_text}\n\n"
             f"Prior context from past internal reports (may be stale):\n{memory_context}"
         )
 
@@ -232,48 +237,29 @@ def combine_node(state: ResearchState) -> ResearchState:
 
 
 def report_node(state: ResearchState) -> ResearchState:
-    """Generate a final structured markdown report.
+    """Generate a final report.
 
-    Populates ``report`` and ``report_metadata``.
+    When ``enable_structured_report_v2`` is True, produces a claim-centric
+    ``StructuredReportV2`` and renders it to markdown.  Falls back to the
+    original prose report on parse failures, setting ``error`` only when
+    both attempts fail.
+
+    Populates ``report``, ``report_metadata``, and (v2) ``structured_report``,
+    ``claims``, ``source_assessments``.
     """
+    from src.config import settings
+
     query = state.get("query", "")
     combined = state.get("combined_insights", "")
     summaries = state.get("summaries", [])
+
     with start_step_span(
         name="report_node",
         run_type="chain",
         node_name="report",
-        inputs={"summary_count": len(summaries)},
+        inputs={"summary_count": len(summaries), "structured_v2": settings.enable_structured_report_v2},
     ):
-        logger.info("[report_node] generating report")
-
-        sources_md = "\n".join(
-            f"- [{s['title']}]({s['url']})" for s in summaries if s.get("url")
-        )
-        prompt = (
-            f"You are a professional research report writer. Based on the synthesis below, "
-            f"produce a polished markdown report with:\n"
-            f"1. A clear title (H1)\n"
-            f"2. An executive summary section\n"
-            f"3. Key findings as bullet points\n"
-            f"4. A conclusion\n\n"
-            f"Query: {query}\n\nSynthesis:\n{combined}"
-        )
-
-        llm = get_llm(temperature=0.2)
-        try:
-            response = _invoke_llm(
-                prompt,
-                step_name="report",
-                llm=llm,
-                metadata={"summary_count": len(summaries)},
-            )
-            report_text = (
-                str(response.content) if hasattr(response, "content") else str(response)
-            )
-            report_text = report_text.strip()
-        except Exception as exc:
-            raise LLMError(f"Report generation failed: {exc}") from exc
+        logger.info("[report_node] generating report (v2=%s)", settings.enable_structured_report_v2)
 
         metadata = {
             "title": query,
@@ -281,11 +267,117 @@ def report_node(state: ResearchState) -> ResearchState:
             "generated_at": datetime.now(UTC).isoformat(),
         }
 
-        # Append references section
-        if sources_md:
-            report_text += f"\n\n## References\n\n{sources_md}"
+        if settings.enable_structured_report_v2:
+            return _report_node_v2(state, query, combined, summaries, metadata)
 
-        return {**state, "report": report_text, "report_metadata": metadata}
+        return _report_node_v1(state, query, combined, summaries, metadata)
+
+
+def _build_structured_prompt(query: str, combined: str, summaries: list[dict]) -> str:
+    """Build the prompt for structured v2 report generation."""
+    sources_block = "\n".join(
+        f"- {s.get('title', 'Untitled')} ({s.get('url', '')})" for s in summaries if s.get("url")
+    )
+    return (
+        f"You are a professional research analyst. Based on the synthesis below, produce a "
+        f"structured research report for the query: '{query}'.\n\n"
+        f"Requirements:\n"
+        f"- Extract 3–8 discrete, verifiable CLAIMS from the research.\n"
+        f"- For each claim assign a confidence score (0.0–1.0) based on source agreement and evidence quality.\n"
+        f"- Link each claim to the source URLs that support it.\n"
+        f"- Assess each source for reliability (0.0–1.0) and note any bias or quality concerns.\n"
+        f"- Write a concise executive summary and conclusion.\n\n"
+        f"Available sources:\n{sources_block}\n\n"
+        f"Synthesis:\n{combined}"
+    )
+
+
+def _report_node_v2(
+    state: ResearchState,
+    query: str,
+    combined: str,
+    summaries: list[dict],
+    metadata: dict,
+) -> ResearchState:
+    """Structured output report with retry on parse failure."""
+    llm = get_llm(temperature=0.1)
+    structured_llm = llm.with_structured_output(StructuredReportV2)
+    prompt = _build_structured_prompt(query, combined, summaries)
+
+    structured: StructuredReportV2 | None = None
+    for attempt in range(1, 3):
+        try:
+            with start_step_span(
+                name=f"report_node.structured_invoke.attempt_{attempt}",
+                run_type="llm",
+                node_name="report",
+                inputs={"attempt": attempt},
+                tags=["llm", "structured"],
+            ):
+                structured = structured_llm.invoke(prompt)
+            break
+        except (ValidationError, Exception) as exc:
+            logger.warning("[report_node] structured attempt %d failed: %s", attempt, exc)
+            if attempt == 2:
+                # Deterministic user-visible error — both attempts exhausted
+                error_msg = (
+                    "Report generation failed: could not produce a valid structured report "
+                    "after 2 attempts. Please try again or disable structured output."
+                )
+                return {**state, "error": error_msg, "report": "", "report_metadata": metadata}
+
+    assert structured is not None  # guarded by loop above
+    report_text = structured.to_markdown()
+    return {
+        **state,
+        "report": report_text,
+        "report_metadata": metadata,
+        "structured_report": structured.model_dump(),
+        "claims": [c.model_dump() for c in structured.claims],
+        "source_assessments": [sa.model_dump() for sa in structured.source_assessments],
+    }
+
+
+def _report_node_v1(
+    state: ResearchState,
+    query: str,
+    combined: str,
+    summaries: list[dict],
+    metadata: dict,
+) -> ResearchState:
+    """Original prose-based report generation (backward-compatible)."""
+    sources_md = "\n".join(
+        f"- [{s['title']}]({s['url']})" for s in summaries if s.get("url")
+    )
+    prompt = (
+        f"You are a professional research report writer. Based on the synthesis below, "
+        f"produce a polished markdown report with:\n"
+        f"1. A clear title (H1)\n"
+        f"2. An executive summary section\n"
+        f"3. Key findings as bullet points\n"
+        f"4. A conclusion\n\n"
+        f"Query: {query}\n\nSynthesis:\n{combined}"
+    )
+
+    llm = get_llm(temperature=0.2)
+    try:
+        response = _invoke_llm(
+            prompt,
+            step_name="report",
+            llm=llm,
+            metadata={"summary_count": len(summaries)},
+        )
+        report_text = (
+            str(response.content) if hasattr(response, "content") else str(response)
+        )
+        report_text = report_text.strip()
+    except Exception as exc:
+        raise LLMError(f"Report generation failed: {exc}") from exc
+
+    if sources_md:
+        report_text += f"\n\n## References\n\n{sources_md}"
+
+    return {**state, "report": report_text, "report_metadata": metadata}
 
 
 # ---------------------------------------------------------------------------
