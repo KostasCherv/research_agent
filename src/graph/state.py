@@ -29,6 +29,12 @@ class ResearchState(TypedDict, total=False):
     report: str                     # Final markdown report
     report_metadata: dict           # {title, sources, generated_at}
 
+    # Session context (populated by API layer when running inside a session)
+    session_id: str | None          # Parent session ID
+    run_id: str | None              # This run's unique ID
+    active_source_urls: list[str]   # URLs retrieved in this run
+    conversation_history: list[dict] # [{role, content, run_id}] prior turns
+
     # Control flow
     error: str | None               # Set on unrecoverable errors
     use_vector_store: bool          # Whether to persist to Chroma

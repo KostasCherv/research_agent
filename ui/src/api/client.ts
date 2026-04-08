@@ -1,4 +1,11 @@
-import type { HealthResponse, ResearchRequest, ResearchStreamEvent } from '../types'
+import type {
+  Citation,
+  FollowupStreamEvent,
+  HealthResponse,
+  ResearchRequest,
+  ResearchStreamEvent,
+  SessionDetail,
+} from '../types'
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8000'
 
@@ -33,6 +40,143 @@ function parseEventBlock(block: string): ResearchStreamEvent | null {
     return null
   }
   return parsed
+}
+
+// ---------------------------------------------------------------------------
+// Session API
+// ---------------------------------------------------------------------------
+
+export async function createSession(): Promise<{ session_id: string; created_at: string }> {
+  const response = await fetch(`${API_BASE}/sessions`, { method: 'POST' })
+  if (!response.ok) {
+    throw new Error(`Failed to create session: ${response.status}`)
+  }
+  return (await response.json()) as { session_id: string; created_at: string }
+}
+
+export async function getSession(sessionId: string): Promise<SessionDetail> {
+  const response = await fetch(`${API_BASE}/sessions/${sessionId}`)
+  if (!response.ok) {
+    throw new Error(`Session not found: ${response.status}`)
+  }
+  return (await response.json()) as SessionDetail
+}
+
+type FollowupOptions = {
+  signal?: AbortSignal
+  onChunk: (text: string) => void
+  onCitations: (citations: Citation[]) => void
+  onDone: () => void
+  onError?: (error: string) => void
+}
+
+export async function streamFollowup(
+  sessionId: string,
+  question: string,
+  runId: string | null,
+  options: FollowupOptions,
+): Promise<void> {
+  const response = await fetch(`${API_BASE}/sessions/${sessionId}/followup`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' },
+    body: JSON.stringify({ question, run_id: runId }),
+    signal: options.signal,
+  })
+
+  if (!response.ok) {
+    throw new Error(`Followup request failed: ${response.status}`)
+  }
+  if (!response.body) {
+    throw new Error('Streaming not supported.')
+  }
+
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder('utf-8')
+  let buffer = ''
+
+  while (true) {
+    const { value, done } = await reader.read()
+    if (done) break
+    buffer += decoder.decode(value, { stream: true })
+    const chunks = buffer.split('\n\n')
+    buffer = chunks.pop() ?? ''
+
+    for (const chunk of chunks) {
+      const dataLine = chunk.split('\n').find((l) => l.startsWith('data:'))
+      if (!dataLine) continue
+      let parsed: FollowupStreamEvent
+      try {
+        parsed = JSON.parse(dataLine.replace(/^data:\s?/, '')) as FollowupStreamEvent
+      } catch {
+        continue
+      }
+
+      if (parsed.type === 'chunk') {
+        options.onChunk(parsed.text)
+      } else if (parsed.type === 'citations') {
+        options.onCitations(parsed.citations)
+      } else if (parsed.type === 'done') {
+        options.onDone()
+        return
+      } else if (parsed.type === 'error') {
+        options.onError?.(parsed.error)
+        return
+      }
+    }
+  }
+
+  options.onDone()
+}
+
+export async function streamSessionResearch(
+  sessionId: string,
+  payload: ResearchRequest,
+  options: StreamOptions,
+): Promise<{ runId: string | null }> {
+  const response = await fetch(`${API_BASE}/sessions/${sessionId}/research`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' },
+    body: JSON.stringify(payload),
+    signal: options.signal,
+  })
+
+  if (!response.ok) {
+    throw new Error(`Session research failed: ${response.status}`)
+  }
+  if (!response.body) {
+    throw new Error('Streaming not supported.')
+  }
+
+  const runId = response.headers.get('X-Run-Id')
+
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder('utf-8')
+  let buffer = ''
+
+  while (true) {
+    const { value, done } = await reader.read()
+    if (done) break
+    buffer += decoder.decode(value, { stream: true })
+    const chunks = buffer.split('\n\n')
+    buffer = chunks.pop() ?? ''
+
+    for (const chunk of chunks) {
+      const event = parseEventBlock(chunk)
+      if (!event) continue
+      options.onEvent(event)
+      if (event.node === '__end__') {
+        options.onDone?.()
+        return { runId }
+      }
+    }
+  }
+
+  if (buffer.trim()) {
+    const event = parseEventBlock(buffer)
+    if (event) options.onEvent(event)
+  }
+  options.onDone?.()
+  return { runId }
 }
 
 export async function streamResearch(

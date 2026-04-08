@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { AlertCircle, CheckCircle2, LoaderCircle } from 'lucide-react'
-import { checkHealth, streamResearch } from './api/client'
+import { checkHealth, createSession, streamSessionResearch, streamResearch } from './api/client'
 import { ChatForm } from './components/ChatForm'
+import { FollowupChat } from './components/FollowupChat'
 import { Layout } from './components/Layout'
 import { ReportViewer } from './components/ReportViewer'
 import { ResearchProgress } from './components/ResearchProgress'
-import type { HealthResponse, ResearchStreamEvent } from './types'
+import type { ConversationTurn, HealthResponse, ResearchStreamEvent } from './types'
 
 type HealthState = 'loading' | 'online' | 'offline'
 
@@ -16,6 +17,12 @@ function App() {
   const [report, setReport] = useState('')
   const [lastQuery, setLastQuery] = useState('')
   const [error, setError] = useState<string | null>(null)
+
+  // Session state
+  const [sessionId, setSessionId] = useState<string | null>(null)
+  const [runId, setRunId] = useState<string | null>(null)
+  const [conversation, setConversation] = useState<ConversationTurn[]>([])
+
   const abortRef = useRef<AbortController | null>(null)
 
   const loadHealth = useCallback(async () => {
@@ -37,6 +44,10 @@ function App() {
     }
   }, [])
 
+  const handleConversationUpdate = useCallback((turn: ConversationTurn) => {
+    setConversation((prev) => [...prev, turn])
+  }, [])
+
   const handleSubmit = useCallback(
     async (query: string, useVectorStore: boolean) => {
       if (!query.trim()) {
@@ -53,31 +64,51 @@ function App() {
       setReport('')
       setLastQuery(normalizedQuery)
       setEvents([])
+      setConversation([])
+      setRunId(null)
       setIsStreaming(true)
 
-      try {
-        await streamResearch(
-          { query: normalizedQuery, use_vector_store: useVectorStore },
-          {
-            signal: controller.signal,
-            onEvent: (event) => {
-              setEvents((prev) => [...prev, event])
-              if (event.data.report) {
-                setReport(event.data.report)
-              }
-              if (event.node === '__error__') {
-                setError(event.data.error ?? 'Research failed unexpectedly.')
-              }
-            },
-            onDone: () => {
-              setIsStreaming(false)
-            },
-          },
-        )
-      } catch (streamError) {
-        if (controller.signal.aborted) {
-          return
+      // Ensure we have a session
+      let currentSessionId = sessionId
+      if (!currentSessionId) {
+        try {
+          const { session_id } = await createSession()
+          currentSessionId = session_id
+          setSessionId(session_id)
+        } catch {
+          // Fall back to sessionless mode if session creation fails
+          currentSessionId = null
         }
+      }
+
+      const streamOptions = {
+        signal: controller.signal,
+        onEvent: (event: ResearchStreamEvent) => {
+          setEvents((prev) => [...prev, event])
+          if (event.data.report) setReport(event.data.report)
+          if (event.node === '__error__') {
+            setError(event.data.error ?? 'Research failed unexpectedly.')
+          }
+        },
+        onDone: () => setIsStreaming(false),
+      }
+
+      try {
+        if (currentSessionId) {
+          const { runId: newRunId } = await streamSessionResearch(
+            currentSessionId,
+            { query: normalizedQuery, use_vector_store: useVectorStore },
+            streamOptions,
+          )
+          if (newRunId) setRunId(newRunId)
+        } else {
+          await streamResearch(
+            { query: normalizedQuery, use_vector_store: useVectorStore },
+            streamOptions,
+          )
+        }
+      } catch (streamError) {
+        if (controller.signal.aborted) return
         const message =
           streamError instanceof Error
             ? streamError.message
@@ -90,7 +121,7 @@ function App() {
         }
       }
     },
-    [],
+    [sessionId],
   )
 
   const healthIndicator = useMemo(() => {
@@ -126,6 +157,14 @@ function App() {
         isStreaming={isStreaming}
         error={error}
       />
+      {report && sessionId && (
+        <FollowupChat
+          sessionId={sessionId}
+          runId={runId}
+          conversation={conversation}
+          onConversationUpdate={handleConversationUpdate}
+        />
+      )}
     </Layout>
   )
 }
