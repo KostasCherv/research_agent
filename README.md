@@ -48,7 +48,9 @@ Each node is a pure function that receives and returns a `ResearchState` TypedDi
 | Streaming API | FastAPI SSE endpoint for real-time progress |
 | CLI | Typer + Rich for beautiful terminal output |
 | Vector storage | ChromaDB for persisting and searching reports |
-| Research sessions | Server-side session store tracks conversation history and run metadata |
+| Research sessions | Supabase Postgres session store tracks runs and conversation history |
+| Strict user isolation | All session endpoints are auth-protected and scoped per authenticated user |
+| Session management UX | Left sidebar with past sessions, LLM-generated titles, rename (double-click), delete (right-click) |
 | Follow-up chat | ChatGPT-style chat grounded to the same sources as the research report |
 | Per-run source chunks | Source passages are chunked, stored, and retrieved per run for grounded answers |
 | LangSmith observability | Full workflow tracing: root runs, node spans, external calls, and failure context |
@@ -123,6 +125,12 @@ Frontend API configuration:
   - `VITE_SUPABASE_URL`
   - `VITE_SUPABASE_ANON_KEY`
 
+Session UX:
+- Clicking **Run research** always creates a new session.
+- The left sidebar lists the authenticated user's past sessions.
+- Double-click a session title to rename it.
+- Right-click a session entry to open the context menu (rename/delete).
+
 Run backend + frontend together (two terminals):
 
 ```bash
@@ -159,8 +167,11 @@ python -m src.main serve
 |---|---|---|
 | `/health` | `GET` | Liveness probe |
 | `/research` | `POST` | Run pipeline with SSE streaming (sessionless) |
-| `/sessions` | `POST` | Create a new research session |
+| `/sessions` | `POST` | Create a new auth-scoped research session (supports title suggestion from `query`) |
+| `/sessions` | `GET` | List auth-scoped session summaries (`session_id`, `title`, `created_at`) |
 | `/sessions/{id}` | `GET` | Get session state and conversation history |
+| `/sessions/{id}` | `PATCH` | Rename a session (`title`) |
+| `/sessions/{id}` | `DELETE` | Delete a session |
 | `/sessions/{id}/research` | `POST` | Run pipeline within a session (SSE); returns `X-Run-Id` header |
 | `/sessions/{id}/followup` | `POST` | Ask a follow-up question grounded to a run's sources (SSE) |
 
@@ -176,16 +187,22 @@ Example — session-based research + follow-up:
 
 ```bash
 # 1. Create session
-SESSION=$(curl -s -X POST http://localhost:8000/sessions | jq -r '.session_id')
+# (TOKEN should come from Supabase Auth sign-in)
+SESSION=$(curl -s -X POST http://localhost:8000/sessions \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"query":"What is LangGraph?"}' | jq -r '.session_id')
 
 # 2. Run research (note X-Run-Id response header)
 curl -N -X POST http://localhost:8000/sessions/$SESSION/research \
+  -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -D - \
   -d '{"query": "What is LangGraph?", "use_vector_store": true}'
 
 # 3. Ask a follow-up (uses the latest run by default)
 curl -N -X POST http://localhost:8000/sessions/$SESSION/followup \
+  -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"question": "Can it work without LangChain?"}'
 ```
@@ -235,8 +252,10 @@ You get full observability from input to final report: where time is spent, wher
 | `SUPABASE_SERVICE_ROLE_KEY` | — | Backend key for session persistence operations |
 | `SUPABASE_JWKS_URL` | — | Optional explicit JWKS URL for token verification |
 | `SUPABASE_JWT_AUDIENCE` | `authenticated` | Expected audience in Supabase access tokens |
+| `SUPABASE_JWT_SECRET` | — | Optional HS256 verification secret used as fallback path |
 
 Session endpoints now require a bearer token from Supabase Auth. The recommended UI flow is Google OAuth via Supabase on the frontend, then forwarding `Authorization: Bearer <access_token>` for session endpoints.
+Session persistence is intentionally a hard requirement: server startup validates Supabase configuration and fails fast if required vars are missing.
 
 When `LANGSMITH_TRACING=true`, workflow runs and per-node spans are sent to LangSmith with redaction-by-default payload handling.
 
@@ -260,7 +279,9 @@ src/
 ├── config.py           # Pydantic-settings config (feature flags, env vars)
 ├── errors.py           # Custom exceptions
 ├── main.py             # Typer CLI
-├── sessions.py         # In-memory session store (Session, SessionRun, ConversationTurn)
+├── auth.py             # Supabase JWT validation dependency (FastAPI)
+├── sessions.py         # Session domain models + persistence helpers
+├── db/supabase_store.py # Supabase PostgREST persistence implementation
 ├── llm/factory.py      # LLM factory (OpenAI / Ollama)
 ├── graph/
 │   ├── state.py        # ResearchState TypedDict
