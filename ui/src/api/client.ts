@@ -5,6 +5,7 @@ import type {
   ResearchRequest,
   ResearchStreamEvent,
   SessionDetail,
+  SessionSummary,
 } from '../types'
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8000'
@@ -13,6 +14,13 @@ type StreamOptions = {
   signal?: AbortSignal
   onEvent: (event: ResearchStreamEvent) => void
   onDone?: () => void
+}
+
+function authHeaders(accessToken: string | null): HeadersInit {
+  if (!accessToken) {
+    return {}
+  }
+  return { Authorization: `Bearer ${accessToken}` }
 }
 
 export async function checkHealth(): Promise<HealthResponse> {
@@ -46,20 +54,49 @@ function parseEventBlock(block: string): ResearchStreamEvent | null {
 // Session API
 // ---------------------------------------------------------------------------
 
-export async function createSession(): Promise<{ session_id: string; created_at: string }> {
-  const response = await fetch(`${API_BASE}/sessions`, { method: 'POST' })
+export async function createSession(
+  accessToken: string | null,
+  query?: string,
+): Promise<{ session_id: string; title: string; created_at: string }> {
+  const response = await fetch(`${API_BASE}/sessions`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...authHeaders(accessToken),
+    },
+    body: JSON.stringify({ query: query ?? null }),
+  })
   if (!response.ok) {
     throw new Error(`Failed to create session: ${response.status}`)
   }
-  return (await response.json()) as { session_id: string; created_at: string }
+  return (await response.json()) as { session_id: string; title: string; created_at: string }
 }
 
-export async function getSession(sessionId: string): Promise<SessionDetail> {
-  const response = await fetch(`${API_BASE}/sessions/${sessionId}`)
+export async function getSession(sessionId: string, accessToken: string | null): Promise<SessionDetail> {
+  const response = await fetch(`${API_BASE}/sessions/${sessionId}`, {
+    headers: authHeaders(accessToken),
+  })
   if (!response.ok) {
     throw new Error(`Session not found: ${response.status}`)
   }
   return (await response.json()) as SessionDetail
+}
+
+export async function listSessions(
+  accessToken: string | null,
+): Promise<{ sessions: SessionSummary[] }> {
+  const response = await fetch(`${API_BASE}/sessions`, {
+    headers: authHeaders(accessToken),
+  })
+  // Backward compatibility while backend is restarting/updating.
+  // 401 is treated as empty so optional sidebar loading never hard-fails the UI.
+  if (response.status === 401 || response.status === 404 || response.status === 405) {
+    return { sessions: [] }
+  }
+  if (!response.ok) {
+    throw new Error(`Failed to list sessions: ${response.status}`)
+  }
+  return (await response.json()) as { sessions: SessionSummary[] }
 }
 
 type FollowupOptions = {
@@ -74,11 +111,16 @@ export async function streamFollowup(
   sessionId: string,
   question: string,
   runId: string | null,
+  accessToken: string | null,
   options: FollowupOptions,
 ): Promise<void> {
   const response = await fetch(`${API_BASE}/sessions/${sessionId}/followup`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' },
+    headers: {
+      'Content-Type': 'application/json',
+      Accept: 'text/event-stream',
+      ...authHeaders(accessToken),
+    },
     body: JSON.stringify({ question, run_id: runId }),
     signal: options.signal,
   })
@@ -159,11 +201,16 @@ export async function streamFollowup(
 export async function streamSessionResearch(
   sessionId: string,
   payload: ResearchRequest,
+  accessToken: string | null,
   options: StreamOptions,
 ): Promise<{ runId: string | null }> {
   const response = await fetch(`${API_BASE}/sessions/${sessionId}/research`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' },
+    headers: {
+      'Content-Type': 'application/json',
+      Accept: 'text/event-stream',
+      ...authHeaders(accessToken),
+    },
     body: JSON.stringify(payload),
     signal: options.signal,
   })

@@ -45,8 +45,15 @@ export type ConversationTurn = {
 
 export type SessionDetail = {
   session_id: string
+  title: string
   runs: SessionRun[]
   conversation: ConversationTurn[]
+  created_at: string
+}
+
+export type SessionSummary = {
+  session_id: string
+  title: string
   created_at: string
 }
 

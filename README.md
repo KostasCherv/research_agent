@@ -119,6 +119,9 @@ npm run preview
 Frontend API configuration:
 - The UI reads `VITE_API_BASE_URL`.
 - If unset, it defaults to `http://localhost:8000`.
+- The UI also requires Supabase auth vars for Google sign-in:
+  - `VITE_SUPABASE_URL`
+  - `VITE_SUPABASE_ANON_KEY`
 
 Run backend + frontend together (two terminals):
 
@@ -228,6 +231,12 @@ You get full observability from input to final report: where time is spent, wher
 | `LANGSMITH_ENDPOINT` | `https://api.smith.langchain.com` | LangSmith API endpoint |
 | `LANGSMITH_REDACTION_MODE` | `redacted_default` | `full_payloads`, `redacted_default`, or `metadata_only` |
 | `LANGSMITH_SAMPLING_RATE` | `1.0` | Fraction of workflow runs to trace (0.0-1.0) |
+| `SUPABASE_URL` | — | Supabase project URL (used for PostgREST + JWKS defaults) |
+| `SUPABASE_SERVICE_ROLE_KEY` | — | Backend key for session persistence operations |
+| `SUPABASE_JWKS_URL` | — | Optional explicit JWKS URL for token verification |
+| `SUPABASE_JWT_AUDIENCE` | `authenticated` | Expected audience in Supabase access tokens |
+
+Session endpoints now require a bearer token from Supabase Auth. The recommended UI flow is Google OAuth via Supabase on the frontend, then forwarding `Authorization: Bearer <access_token>` for session endpoints.
 
 When `LANGSMITH_TRACING=true`, workflow runs and per-node spans are sent to LangSmith with redaction-by-default payload handling.
 

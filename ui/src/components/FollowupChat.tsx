@@ -5,6 +5,7 @@ import type { Citation, ConversationTurn } from '../types'
 type FollowupChatProps = {
   sessionId: string
   runId: string | null
+  accessToken: string | null
   conversation: ConversationTurn[]
   onConversationUpdate: (turn: ConversationTurn) => void
 }
@@ -65,6 +66,7 @@ function AssistantBubble({
 export function FollowupChat({
   sessionId,
   runId,
+  accessToken,
   conversation,
   onConversationUpdate,
 }: FollowupChatProps) {
@@ -128,7 +130,7 @@ export function FollowupChat({
     let finalCitations: Citation[] = []
 
     try {
-      await streamFollowup(sessionId, q, runId, {
+      await streamFollowup(sessionId, q, runId, accessToken, {
         signal: controller.signal,
         onChunk: (text) => {
           accumulatedAnswer += text
@@ -165,7 +167,7 @@ export function FollowupChat({
         abortRef.current = null
       }
     }
-  }, [question, streaming, sessionId, runId, onConversationUpdate])
+  }, [question, streaming, sessionId, runId, accessToken, onConversationUpdate])
 
   const handleSubmit = useCallback(
     (e: React.FormEvent) => {

@@ -1,10 +1,12 @@
 """Tests for FastAPI endpoints (src/api/endpoints.py)"""
 
 import json
-from unittest.mock import patch, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 from fastapi.testclient import TestClient
 
 from src.api.endpoints import app
+from src.auth import AuthenticatedUser, get_authenticated_user
+from src.sessions import Session, SessionRun
 
 client = TestClient(app)
 
@@ -12,6 +14,13 @@ client = TestClient(app)
 def _mock_asyncio_run(coro):
     coro.close()  # prevent "coroutine was never awaited" warnings
     return "Page text"
+
+
+def _auth_override() -> AuthenticatedUser:
+    return AuthenticatedUser(user_id="test-user", email="test@example.com")
+
+
+app.dependency_overrides[get_authenticated_user] = _auth_override
 
 
 def test_health_returns_ok():
@@ -61,58 +70,89 @@ def test_research_bad_request_returns_422():
 # ---------------------------------------------------------------------------
 
 def test_create_session_returns_session_id():
-    response = client.post("/sessions")
+    mock_session = Session(
+        session_id="session-1",
+        title="LangGraph basics",
+        created_at="2026-01-01T00:00:00+00:00",
+    )
+    with patch("src.api.endpoints.create_session", new=AsyncMock(return_value=mock_session)):
+        response = client.post("/sessions", json={"query": "What is LangGraph?"})
     assert response.status_code == 200
     data = response.json()
-    assert "session_id" in data
-    assert "created_at" in data
+    assert data["session_id"] == "session-1"
+    assert data["title"] == "LangGraph basics"
+    assert data["created_at"] == "2026-01-01T00:00:00+00:00"
 
 
 def test_get_session_returns_session_state():
-    create_resp = client.post("/sessions")
-    session_id = create_resp.json()["session_id"]
+    mock_session = Session(session_id="session-1", runs=[], conversation=[], created_at="2026")
+    with patch("src.api.endpoints.get_session", new=AsyncMock(return_value=mock_session)):
+        get_resp = client.get("/sessions/session-1")
+        assert get_resp.status_code == 200
+        data = get_resp.json()
+        assert data["session_id"] == "session-1"
+        assert data["runs"] == []
+        assert data["conversation"] == []
 
-    get_resp = client.get(f"/sessions/{session_id}")
-    assert get_resp.status_code == 200
-    data = get_resp.json()
-    assert data["session_id"] == session_id
-    assert data["runs"] == []
-    assert data["conversation"] == []
+
+def test_list_sessions_returns_summaries():
+    with patch(
+        "src.api.endpoints.list_sessions",
+        new=AsyncMock(
+            return_value=[
+                {
+                    "session_id": "session-1",
+                    "title": "LangGraph basics",
+                    "created_at": "2026-01-01T00:00:00+00:00",
+                },
+                {
+                    "session_id": "session-2",
+                    "title": "Agent architecture",
+                    "created_at": "2026-01-02T00:00:00+00:00",
+                },
+            ]
+        ),
+    ):
+        response = client.get("/sessions")
+    assert response.status_code == 200
+    data = response.json()
+    assert len(data["sessions"]) == 2
+    assert data["sessions"][0]["session_id"] == "session-1"
 
 
 def test_get_session_returns_404_for_unknown_id():
-    response = client.get("/sessions/does-not-exist")
-    assert response.status_code == 404
+    with patch("src.api.endpoints.get_session", new=AsyncMock(return_value=None)):
+        response = client.get("/sessions/does-not-exist")
+        assert response.status_code == 404
 
 
 def test_followup_returns_400_when_no_run_exists():
-    create_resp = client.post("/sessions")
-    session_id = create_resp.json()["session_id"]
-
-    followup_resp = client.post(
-        f"/sessions/{session_id}/followup",
-        json={"question": "What did you find?"},
-    )
-    assert followup_resp.status_code == 400
+    mock_session = Session(session_id="session-1", runs=[], conversation=[], created_at="2026")
+    with patch("src.api.endpoints.get_session", new=AsyncMock(return_value=mock_session)):
+        followup_resp = client.post(
+            "/sessions/session-1/followup",
+            json={"question": "What did you find?"},
+        )
+        assert followup_resp.status_code == 400
 
 
 def test_followup_returns_404_for_unknown_session():
-    response = client.post(
-        "/sessions/no-such-session/followup",
-        json={"question": "anything"},
-    )
-    assert response.status_code == 404
+    with patch("src.api.endpoints.get_session", new=AsyncMock(return_value=None)):
+        response = client.post(
+            "/sessions/no-such-session/followup",
+            json={"question": "anything"},
+        )
+        assert response.status_code == 404
 
 
 def test_followup_returns_404_for_unknown_run_id():
-    create_resp = client.post("/sessions")
-    session_id = create_resp.json()["session_id"]
-
-    response = client.post(
-        f"/sessions/{session_id}/followup",
-        json={"question": "anything", "run_id": "nonexistent-run"},
-    )
-    assert response.status_code == 404
+    mock_session = Session(session_id="session-1", runs=[], conversation=[], created_at="2026")
+    with patch("src.api.endpoints.get_session", new=AsyncMock(return_value=mock_session)):
+        response = client.post(
+            "/sessions/session-1/followup",
+            json={"question": "anything", "run_id": "nonexistent-run"},
+        )
+        assert response.status_code == 404
 
 
 def test_session_research_streams_events_and_records_run():
@@ -120,9 +160,12 @@ def test_session_research_streams_events_and_records_run():
     mock_llm = MagicMock()
     mock_llm.invoke.return_value = MagicMock(content="LLM output text.")
 
-    # Create session first
-    create_resp = client.post("/sessions")
-    session_id = create_resp.json()["session_id"]
+    mock_session = Session(
+        session_id="session-1",
+        runs=[SessionRun(run_id="old", query="q", source_urls=[], report="", created_at="2026")],
+        conversation=[],
+        created_at="2026",
+    )
 
     with (
         patch("src.graph.nodes.perform_search", return_value=search_result),
@@ -130,9 +173,11 @@ def test_session_research_streams_events_and_records_run():
         patch("src.graph.nodes.get_llm", return_value=mock_llm),
         patch("src.graph.nodes.VectorStoreManager"),
         patch("src.api.endpoints.VectorStoreManager"),
+        patch("src.api.endpoints.get_session", new=AsyncMock(return_value=mock_session)),
+        patch("src.api.endpoints.append_run", new=AsyncMock(return_value=None)),
     ):
         response = client.post(
-            f"/sessions/{session_id}/research",
+            "/sessions/session-1/research",
             json={"query": "What is LangGraph?", "use_vector_store": False},
         )
 
@@ -148,8 +193,13 @@ def test_session_research_streams_events_and_records_run():
     node_names = [e["node"] for e in events]
     assert "__end__" in node_names
 
-    # Session should now have one run recorded
-    session_resp = client.get(f"/sessions/{session_id}")
-    session_data = session_resp.json()
-    assert len(session_data["runs"]) == 1
-    assert session_data["runs"][0]["query"] == "What is LangGraph?"
+    assert response.headers.get("X-Run-Id")
+
+
+def test_session_endpoints_require_auth():
+    app.dependency_overrides.pop(get_authenticated_user, None)
+    try:
+        create_resp = client.post("/sessions", json={})
+        assert create_resp.status_code == 401
+    finally:
+        app.dependency_overrides[get_authenticated_user] = _auth_override

@@ -1,6 +1,11 @@
 .venv
 .env
+.env.local
+.env.*.local
+ui/.env
+ui/.env.local
 __pycache__
+*.pyc
 docs
 research_agent.egg-info
 .ruff_cache
@@ -9,3 +14,8 @@ research_agent.egg-info
 chroma_db
 reports
 .worktrees
+node_modules
+ui/node_modules
+ui/dist
+.DS_Store
+supabase/.temp
