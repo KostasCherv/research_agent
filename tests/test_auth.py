@@ -18,7 +18,10 @@ def test_get_authenticated_user_rejects_missing_token():
 
 
 def test_get_authenticated_user_accepts_valid_jwt_payload():
-    credentials = HTTPAuthorizationCredentials(scheme="Bearer", credentials="token")
+    credentials = HTTPAuthorizationCredentials(
+        scheme="Bearer",
+        credentials="eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ1c2VyLTEifQ.signature",
+    )
     mock_key = MagicMock()
     mock_key.key = "public-key"
 
@@ -38,8 +41,14 @@ def test_get_authenticated_user_accepts_valid_jwt_payload():
 
 
 def test_get_authenticated_user_rejects_invalid_jwt():
-    credentials = HTTPAuthorizationCredentials(scheme="Bearer", credentials="bad-token")
-    with patch("src.auth.jwt.PyJWKClient") as mock_jwk_client_cls:
+    credentials = HTTPAuthorizationCredentials(
+        scheme="Bearer",
+        credentials="eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ1c2VyLTEifQ.bad-signature",
+    )
+    with (
+        patch("src.auth.jwt.PyJWKClient") as mock_jwk_client_cls,
+        patch("src.auth._verify_with_supabase_userinfo", side_effect=HTTPException(status_code=401, detail="Invalid or expired token.")),
+    ):
         mock_jwk_client = MagicMock()
         mock_jwk_client.get_signing_key_from_jwt.side_effect = jwt.InvalidTokenError("invalid")
         mock_jwk_client_cls.return_value = mock_jwk_client

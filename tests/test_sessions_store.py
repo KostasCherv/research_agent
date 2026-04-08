@@ -9,7 +9,7 @@ async def test_sessions_module_delegates_create_to_store():
     with patch("src.sessions._get_store", return_value=mock_store):
         created = await create_session("user-1")
     assert created == "session-object"
-    mock_store.create_session.assert_awaited_once_with(user_id="user-1")
+    mock_store.create_session.assert_awaited_once_with(user_id="user-1", title="New session")
 
 
 async def test_sessions_module_delegates_get_to_store():
