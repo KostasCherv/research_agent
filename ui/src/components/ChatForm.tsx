@@ -4,9 +4,10 @@ import { SendHorizontal } from 'lucide-react'
 type ChatFormProps = {
   onSubmit: (query: string, useVectorStore: boolean) => Promise<void>
   disabled: boolean
+  isStreaming: boolean
 }
 
-export function ChatForm({ onSubmit, disabled }: ChatFormProps) {
+export function ChatForm({ onSubmit, disabled, isStreaming }: ChatFormProps) {
   const [query, setQuery] = useState('')
   const [useVectorStore, setUseVectorStore] = useState(true)
 
@@ -54,7 +55,7 @@ export function ChatForm({ onSubmit, disabled }: ChatFormProps) {
           disabled={disabled || !query.trim()}
         >
           <SendHorizontal size={16} />
-          {disabled ? 'Running...' : 'Run Research'}
+          {isStreaming ? 'Running...' : disabled ? 'Sign in to run research' : 'Run Research'}
         </button>
       </form>
     </section>

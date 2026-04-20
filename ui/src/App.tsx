@@ -424,7 +424,7 @@ function App() {
         ) : null
       }
     >
-      <ChatForm onSubmit={handleSubmit} disabled={isStreaming || !authSession} />
+      <ChatForm onSubmit={handleSubmit} disabled={isStreaming || !authSession} isStreaming={isStreaming} />
       <ResearchProgress events={events} isStreaming={isStreaming} />
       <ReportViewer
         report={report}
