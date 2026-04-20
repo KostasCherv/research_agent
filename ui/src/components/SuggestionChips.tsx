@@ -11,9 +11,9 @@ const SuggestionChips: FC<SuggestionChipsProps> = ({ suggestions, onSelect, disa
 
   return (
     <div className="followup-suggestions">
-      {suggestions.map((s, i) => (
+      {suggestions.map((s) => (
         <button
-          key={i}
+          key={s}
           className="followup-suggestion-chip"
           onClick={() => onSelect(s)}
           disabled={disabled}

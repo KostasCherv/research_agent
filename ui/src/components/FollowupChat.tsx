@@ -93,17 +93,6 @@ export function FollowupChat({
     el.style.height = `${Math.min(el.scrollHeight, 160)}px`
   }, [])
 
-  const handleKeyDown = useCallback(
-    (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-      if (e.key === 'Enter' && !e.shiftKey) {
-        e.preventDefault()
-        void submit()
-      }
-    },
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [question, streaming],
-  )
-
   const submit = useCallback(async (overrideText?: string) => {
     const text = overrideText ?? question
     const q = text.trim()
@@ -137,13 +126,19 @@ export function FollowupChat({
       await streamFollowup(sessionId, q, runId, accessToken, {
         signal: controller.signal,
         onChunk: (text) => {
-          accumulatedAnswer += text
-          setStreamingText((prev) => prev + text)
+          if (!controller.signal.aborted) {
+            accumulatedAnswer += text
+            setStreamingText((prev) => prev + text)
+          }
         },
         onCitations: (citations) => {
-          finalCitations = citations
+          if (!controller.signal.aborted) {
+            finalCitations = citations
+          }
         },
-        onSuggestions: (suggestions) => setLatestSuggestions(suggestions),
+        onSuggestions: (suggestions) => {
+          if (!controller.signal.aborted) setLatestSuggestions(suggestions)
+        },
         onDone: () => {
           const assistantTurn: ConversationTurn = {
             role: 'assistant',
@@ -174,6 +169,16 @@ export function FollowupChat({
     }
   }, [question, streaming, sessionId, runId, accessToken, onConversationUpdate])
 
+  const handleKeyDown = useCallback(
+    (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault()
+        void submit()
+      }
+    },
+    [submit],
+  )
+
   const handleSubmit = useCallback(
     (e: React.FormEvent) => {
       e.preventDefault()
@@ -196,11 +201,11 @@ export function FollowupChat({
           <p className="followup-empty">No questions yet. Ask something below.</p>
         )}
 
-        {conversation.map((turn, i) =>
+        {conversation.map((turn) =>
           turn.role === 'user' ? (
-            <UserBubble key={i} turn={turn} />
+            <UserBubble key={`${turn.role}-${turn.created_at}`} turn={turn} />
           ) : (
-            <AssistantBubble key={i} turn={turn} />
+            <AssistantBubble key={`${turn.role}-${turn.created_at}`} turn={turn} />
           ),
         )}
 
