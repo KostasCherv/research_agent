@@ -2,6 +2,7 @@
 
 import json
 import logging
+import re
 from typing import AsyncGenerator
 
 from fastapi import Depends, FastAPI, HTTPException, Request
@@ -229,21 +230,24 @@ async def _generate_suggestions(query: str, answer: str, context: str) -> list[s
             f"Context topics: {context[:500]}"
         )
         result = await llm.ainvoke(prompt)
-        lines = result.content.strip().split("\n")
+        content = result.content
+        if not isinstance(content, str):
+            content = "".join(
+                part if isinstance(part, str) else part.get("text", "")
+                for part in content
+            )
+        lines = content.strip().split("\n")
         suggestions = []
         for line in lines:
             line = line.strip()
             if not line:
                 continue
-            # Strip numbering: "1. ", "1) ", "- "
-            for prefix in ["1. ", "2. ", "3. ", "1) ", "2) ", "3) ", "- "]:
-                if line.startswith(prefix):
-                    line = line[len(prefix):]
-                    break
+            line = re.sub(r"^\s*(\d+[\.\)]\s+|[-*]\s+)", "", line)
             if line:
                 suggestions.append(line)
         return suggestions[:3]
-    except Exception:
+    except Exception as exc:
+        logger.warning("[suggestions] failed to generate follow-up suggestions: %s", exc)
         return []
 
 
