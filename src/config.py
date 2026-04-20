@@ -17,6 +17,22 @@ class Settings(BaseSettings):
     openai_model: str = Field(default="gpt-4o-mini", description="OpenAI model name")
     ollama_base_url: str = Field(default="http://localhost:11434", description="Ollama base URL")
     ollama_model: str = Field(default="llama3.2", description="Ollama model name")
+    embedding_provider: str = Field(
+        default="openai",
+        description="Embedding provider: 'ollama' or 'openai'",
+    )
+    embedding_model: str = Field(
+        default="text-embedding-3-small",
+        description="Embedding model name",
+    )
+    embedding_base_url: str = Field(
+        default="http://localhost:11434",
+        description="Base URL for the embedding provider when required (for example Ollama).",
+    )
+    embedding_dimensions: int = Field(
+        default=1536,
+        description="Expected embedding vector size for the configured Pinecone index.",
+    )
 
     # Search
     tavily_api_key: str = Field(default="", description="Tavily search API key")
