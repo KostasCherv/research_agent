@@ -28,6 +28,10 @@ class Settings(BaseSettings):
     # API
     api_host: str = Field(default="0.0.0.0")
     api_port: int = Field(default=8000)
+    cors_origins: list[str] = Field(
+        default=["http://localhost:5173", "http://127.0.0.1:5173"],
+        description="Allowed CORS origins. Comma-separated in env: CORS_ORIGINS=https://app.example.com,https://staging.example.com",
+    )
     enforce_session_auth: bool = Field(
         default=True,
         description="Require authentication for session endpoints.",
