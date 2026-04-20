@@ -22,8 +22,9 @@ class Settings(BaseSettings):
     tavily_api_key: str = Field(default="", description="Tavily search API key")
     max_search_results: int = Field(default=5, description="Max Tavily search results")
 
-    # Vector store
-    chroma_persist_directory: str = Field(default="./chroma_db", description="ChromaDB directory")
+    # Vector store (Pinecone)
+    pinecone_api_key: str = Field(default="", description="Pinecone API key")
+    pinecone_index_name: str = Field(default="research-agent", description="Pinecone index name")
 
     # API
     api_host: str = Field(default="0.0.0.0")

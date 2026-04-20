@@ -1,62 +1,83 @@
-"""ChromaDB vector store manager."""
+"""Pinecone vector store manager."""
 
 import hashlib
 import logging
 from datetime import datetime, UTC
+from typing import Optional
 
 from src.config import settings
 from src.errors import VectorStoreError
 
 logger = logging.getLogger(__name__)
 
-
-from typing import TYPE_CHECKING, Optional
-if TYPE_CHECKING:
-    from chromadb import ClientAPI, Collection
-
 # Characters per chunk when splitting source text for run-scoped retrieval
 _CHUNK_SIZE = 1000
+# Max texts per OpenAI embeddings API call
+_EMBED_BATCH_SIZE = 500
+# Pinecone namespaces
+_NAMESPACE_REPORTS = "reports"
+_NAMESPACE_CHUNKS = "source_chunks"
+# OpenAI embedding model and its output dimension
+_EMBED_MODEL = "text-embedding-3-small"
+_EMBED_DIM = 1536
+# Pinecone metadata value size limit (bytes); truncate document text to stay under 40KB
+_META_TEXT_LIMIT = 38_000
 
 
 class VectorStoreManager:
-    """Thin wrapper around ChromaDB for storing and querying research reports."""
+    """Thin wrapper around Pinecone for storing and querying research reports."""
 
-    COLLECTION_NAME = "research_reports"
-    CHUNKS_COLLECTION_NAME = "source_chunks"
+    def __init__(self) -> None:
+        self._index: Optional[object] = None
+        self._openai_client: Optional[object] = None
 
-    def __init__(self, persist_directory: str | None = None) -> None:
-        self._persist_dir = persist_directory or settings.chroma_persist_directory
-        self._client: Optional["ClientAPI"] = None
-        self._collection: Optional["Collection"] = None
-        self._chunks_collection: Optional["Collection"] = None
+    # ------------------------------------------------------------------
+    # Private helpers
+    # ------------------------------------------------------------------
 
-    def _ensure_client(self):
-        if self._client is None:
-            import chromadb
-
-            self._client = chromadb.PersistentClient(path=self._persist_dir)
-            self._collection = self._client.get_or_create_collection(
-                name=self.COLLECTION_NAME,
-                metadata={"hnsw:space": "cosine"},
+    def _ensure_index(self):
+        """Return a connected Pinecone index, initialising lazily."""
+        if self._index is not None:
+            return self._index
+        if not settings.pinecone_api_key:
+            raise VectorStoreError(
+                "PINECONE_API_KEY is not set. "
+                "Add it to your .env file before using the vector store."
             )
+        from pinecone import Pinecone
 
-    def _ensure_chunks_collection(self) -> "Collection":
-        """Return the source_chunks collection, initialising it if needed."""
-        if self._chunks_collection is None:
-            if self._client is None:
-                import chromadb
-                self._client = chromadb.PersistentClient(path=self._persist_dir)
-            self._chunks_collection = self._client.get_or_create_collection(
-                name=self.CHUNKS_COLLECTION_NAME,
-                metadata={"hnsw:space": "cosine"},
-            )
-        return self._chunks_collection
+        pc = Pinecone(api_key=settings.pinecone_api_key)
+        self._index = pc.Index(settings.pinecone_index_name)
+        return self._index
+
+    def _embed(self, texts: list[str]) -> list[list[float]]:
+        """Return embeddings for *texts* using OpenAI text-embedding-3-small."""
+        if self._openai_client is None:
+            from openai import OpenAI
+
+            self._openai_client = OpenAI(api_key=settings.openai_api_key)
+
+        embeddings: list[list[float]] = []
+        for batch_start in range(0, len(texts), _EMBED_BATCH_SIZE):
+            batch = texts[batch_start : batch_start + _EMBED_BATCH_SIZE]
+            try:
+                response = self._openai_client.embeddings.create(
+                    input=batch, model=_EMBED_MODEL
+                )
+            except Exception as exc:
+                raise VectorStoreError(f"Embedding request failed: {exc}") from exc
+            embeddings.extend([item.embedding for item in response.data])
+        return embeddings
+
+    # ------------------------------------------------------------------
+    # Public interface
+    # ------------------------------------------------------------------
 
     def save_report(self, query: str, report: str, metadata: dict | None = None) -> str:
-        """Persist a research report to Chroma.
+        """Persist a research report to Pinecone.
 
         Args:
-            query: The original research query (used as document ID seed).
+            query: The original research query.
             report: Markdown report text.
             metadata: Optional extra metadata dict.
 
@@ -64,25 +85,32 @@ class VectorStoreManager:
             The document ID used for storage.
 
         Raises:
-            VectorStoreError: On any Chroma error.
+            VectorStoreError: On any Pinecone or embedding error.
         """
         try:
-            self._ensure_client()
             doc_id = f"report_{datetime.now(UTC).strftime('%Y%m%d%H%M%S%f')}"
+            doc_text = report[:_META_TEXT_LIMIT]
+            if len(report) > _META_TEXT_LIMIT:
+                logger.warning(
+                    "[vector_store] report truncated from %d to %d chars for metadata storage.",
+                    len(report),
+                    _META_TEXT_LIMIT,
+                )
             meta = {
                 "query": query[:512],
                 "generated_at": datetime.now(UTC).isoformat(),
+                "document": doc_text,
                 **(metadata or {}),
             }
-            if self._collection is None:
-                raise VectorStoreError("Collection not initialized.")
-            self._collection.add(
-                documents=[report],
-                metadatas=[meta],
-                ids=[doc_id],
+            embedding = self._embed([report])
+            self._ensure_index().upsert(
+                vectors=[{"id": doc_id, "values": embedding[0], "metadata": meta}],
+                namespace=_NAMESPACE_REPORTS,
             )
             logger.info("Saved report '%s' to vector store.", doc_id)
             return doc_id
+        except VectorStoreError:
+            raise
         except Exception as exc:
             raise VectorStoreError(f"Failed to save report: {exc}") from exc
 
@@ -97,24 +125,26 @@ class VectorStoreManager:
             List of dicts with ``id``, ``document``, and ``metadata`` keys.
 
         Raises:
-            VectorStoreError: On any Chroma error.
+            VectorStoreError: On any Pinecone or embedding error.
         """
         try:
-            self._ensure_client()
-            if self._collection is None:
-                raise VectorStoreError("Collection not initialized.")
-            results = self._collection.query(
-                query_texts=[query],
-                n_results=n_results,
+            embedding = self._embed([query])
+            response = self._ensure_index().query(
+                vector=embedding[0],
+                top_k=n_results,
+                namespace=_NAMESPACE_REPORTS,
+                include_metadata=True,
             )
-            output = []
-            for i, doc_id in enumerate(results["ids"][0]):
-                output.append({
-                    "id": doc_id,
-                    "document": results["documents"][0][i],
-                    "metadata": results["metadatas"][0][i],
-                })
-            return output
+            return [
+                {
+                    "id": match.id,
+                    "document": (match.metadata or {}).get("document", ""),
+                    "metadata": match.metadata or {},
+                }
+                for match in response.matches
+            ]
+        except VectorStoreError:
+            raise
         except Exception as exc:
             raise VectorStoreError(f"Failed to search reports: {exc}") from exc
 
@@ -143,9 +173,8 @@ class VectorStoreManager:
             Number of chunks saved.
         """
         try:
-            collection = self._ensure_chunks_collection()
             ids: list[str] = []
-            documents: list[str] = []
+            texts: list[str] = []
             metadatas: list[dict] = []
 
             for source in sources:
@@ -159,11 +188,10 @@ class VectorStoreManager:
                     if text[start : start + _CHUNK_SIZE].strip()
                 ]
                 for chunk_index, chunk_text in enumerate(chunks):
-                    # Stable, collision-resistant ID
                     id_seed = f"{run_id}:{url}:{chunk_index}"
                     chunk_id = hashlib.md5(id_seed.encode()).hexdigest()
                     ids.append(chunk_id)
-                    documents.append(chunk_text)
+                    texts.append(chunk_text)
                     metadatas.append(
                         {
                             "run_id": run_id,
@@ -171,13 +199,32 @@ class VectorStoreManager:
                             "source_url": url[:512],
                             "source_title": title[:256],
                             "chunk_index": chunk_index,
+                            "text": chunk_text,
                         }
                     )
 
-            if ids:
-                collection.upsert(documents=documents, metadatas=metadatas, ids=ids)
+            if not ids:
+                return 0
+
+            embeddings = self._embed(texts)
+            index = self._ensure_index()
+
+            for batch_start in range(0, len(ids), _EMBED_BATCH_SIZE):
+                batch_end = batch_start + _EMBED_BATCH_SIZE
+                vectors = [
+                    {
+                        "id": ids[i],
+                        "values": embeddings[i],
+                        "metadata": metadatas[i],
+                    }
+                    for i in range(batch_start, min(batch_end, len(ids)))
+                ]
+                index.upsert(vectors=vectors, namespace=_NAMESPACE_CHUNKS)
+
             logger.info("[vector_store] saved %d chunks for run %s", len(ids), run_id)
             return len(ids)
+        except VectorStoreError:
+            raise
         except Exception as exc:
             raise VectorStoreError(f"Failed to save source chunks: {exc}") from exc
 
@@ -199,29 +246,25 @@ class VectorStoreManager:
             ``chunk_index`` keys.
         """
         try:
-            collection = self._ensure_chunks_collection()
-            # Guard: Chroma raises if the collection is empty or n_results > count
-            count = collection.count()
-            if count == 0:
-                return []
-            effective_n = min(n_results, count)
-            results = collection.query(
-                query_texts=[query],
-                n_results=effective_n,
-                where={"run_id": run_id},
+            embedding = self._embed([query])
+            response = self._ensure_index().query(
+                vector=embedding[0],
+                top_k=n_results,
+                namespace=_NAMESPACE_CHUNKS,
+                include_metadata=True,
+                filter={"run_id": {"$eq": run_id}},
             )
-            output: list[dict] = []
-            for i, _ in enumerate(results["ids"][0]):
-                meta = results["metadatas"][0][i]
-                output.append(
-                    {
-                        "text": results["documents"][0][i],
-                        "source_url": meta.get("source_url", ""),
-                        "source_title": meta.get("source_title", ""),
-                        "chunk_index": meta.get("chunk_index", 0),
-                    }
-                )
-            return output
+            if not response.matches:
+                return []
+            return [
+                {
+                    "text": (match.metadata or {}).get("text", ""),
+                    "source_url": (match.metadata or {}).get("source_url", ""),
+                    "source_title": (match.metadata or {}).get("source_title", ""),
+                    "chunk_index": (match.metadata or {}).get("chunk_index", 0),
+                }
+                for match in response.matches
+            ]
         except VectorStoreError:
             raise
         except Exception as exc:

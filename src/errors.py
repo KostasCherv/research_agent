@@ -18,7 +18,7 @@ class LLMError(ResearchAgentError):
 
 
 class VectorStoreError(ResearchAgentError):
-    """Raised when a Chroma vector store operation fails."""
+    """Raised when a vector store operation fails."""
 
 
 class ConfigurationError(ResearchAgentError):

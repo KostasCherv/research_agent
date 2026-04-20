@@ -320,7 +320,7 @@ def vector_store_node(state: ResearchState) -> ResearchState:
                 run_type="tool",
                 node_name="vector_store",
                 inputs={"query": query},
-                tags=["external", "chroma"],
+                tags=["external", "pinecone"],
             ):
                 doc_id = manager.save_report(query=query, report=report, metadata=metadata)
             logger.info("[vector_store_node] saved as %s", doc_id)
@@ -355,7 +355,7 @@ def memory_context_node(state: ResearchState) -> ResearchState:
                 run_type="retriever",
                 node_name="memory_context",
                 inputs={"query": query, "n_results": 3},
-                tags=["external", "chroma"],
+                tags=["external", "pinecone"],
             ):
                 context = vector_store.search_reports(query)
             if context:
