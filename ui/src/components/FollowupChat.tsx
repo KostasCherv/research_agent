@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { streamFollowup } from '../api/client'
 import type { Citation, ConversationTurn } from '../types'
+import SuggestionChips from './SuggestionChips'
 
 type FollowupChatProps = {
   sessionId: string
@@ -74,6 +75,7 @@ export function FollowupChat({
   const [streaming, setStreaming] = useState(false)
   const [streamingText, setStreamingText] = useState('')
   const [error, setError] = useState<string | null>(null)
+  const [latestSuggestions, setLatestSuggestions] = useState<string[]>([])
   const abortRef = useRef<AbortController | null>(null)
   const bottomRef = useRef<HTMLDivElement | null>(null)
   const textareaRef = useRef<HTMLTextAreaElement | null>(null)
@@ -102,8 +104,9 @@ export function FollowupChat({
     [question, streaming],
   )
 
-  const submit = useCallback(async () => {
-    const q = question.trim()
+  const submit = useCallback(async (overrideText?: string) => {
+    const text = overrideText ?? question
+    const q = text.trim()
     if (!q || streaming) return
 
     abortRef.current?.abort()
@@ -125,6 +128,7 @@ export function FollowupChat({
     setStreamingText('')
     setError(null)
     setStreaming(true)
+    setLatestSuggestions([])
 
     let accumulatedAnswer = ''
     let finalCitations: Citation[] = []
@@ -139,6 +143,7 @@ export function FollowupChat({
         onCitations: (citations) => {
           finalCitations = citations
         },
+        onSuggestions: (suggestions) => setLatestSuggestions(suggestions),
         onDone: () => {
           const assistantTurn: ConversationTurn = {
             role: 'assistant',
@@ -219,6 +224,14 @@ export function FollowupChat({
 
         <div ref={bottomRef} />
       </div>
+
+      {!streaming && (
+        <SuggestionChips
+          suggestions={latestSuggestions}
+          onSelect={(text) => void submit(text)}
+          disabled={streaming}
+        />
+      )}
 
       {error && <p className="error-banner followup-error">{error}</p>}
 
