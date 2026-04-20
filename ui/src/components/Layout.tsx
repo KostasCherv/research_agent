@@ -28,7 +28,7 @@ export function Layout({ title, subtitle, status, actions, sidebar, children }: 
           </div>
         </div>
       </header>
-      <div className="layout-body">
+      <div className={`layout-body ${sidebar ? 'layout-body--with-sidebar' : 'layout-body--full'}`}>
         {sidebar ? <aside className="glass-panel sidebar-panel">{sidebar}</aside> : null}
         <main className="content-grid">{children}</main>
       </div>

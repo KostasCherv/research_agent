@@ -438,9 +438,13 @@ p {
 }
 
 @media (min-width: 980px) {
-  .layout-body {
+  .layout-body.layout-body--with-sidebar {
     grid-template-columns: 260px minmax(0, 1fr);
     align-items: start;
+  }
+
+  .layout-body.layout-body--full {
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .sidebar-panel {
