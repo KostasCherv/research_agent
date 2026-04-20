@@ -41,6 +41,7 @@ export type ConversationTurn = {
   run_id: string | null
   citations: Citation[]
   created_at: string
+  suggestions?: string[]
 }
 
 export type SessionDetail = {
@@ -60,5 +61,6 @@ export type SessionSummary = {
 export type FollowupStreamEvent =
   | { type: 'chunk'; text: string }
   | { type: 'citations'; citations: Citation[] }
+  | { type: 'suggestions'; suggestions: string[] }
   | { type: 'done' }
   | { type: 'error'; error: string }
