@@ -136,6 +136,7 @@ type FollowupOptions = {
   signal?: AbortSignal
   onChunk: (text: string) => void
   onCitations: (citations: Citation[]) => void
+  onSuggestions?: (suggestions: string[]) => void
   onDone: () => void
   onError?: (error: string) => void
 }
@@ -176,6 +177,10 @@ export async function streamFollowup(
     }
     if (parsed.type === 'citations') {
       options.onCitations(parsed.citations)
+      return false
+    }
+    if (parsed.type === 'suggestions') {
+      options.onSuggestions?.(parsed.suggestions)
       return false
     }
     if (parsed.type === 'done') {
