@@ -214,3 +214,110 @@ def test_startup_validation_does_not_fail_without_supabase_configuration():
     ):
         asyncio.run(app.router.on_startup[0]())
         mock_init.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Follow-up suggestion tests
+# ---------------------------------------------------------------------------
+
+def test_generate_suggestions_returns_list():
+    """_generate_suggestions parses numbered lines into a list of strings."""
+    from src.api.endpoints import _generate_suggestions
+
+    mock_result = MagicMock()
+    mock_result.content = "1. What are the limitations?\n2. How does it compare to X?\n3. What are real-world use cases?"
+
+    mock_llm = AsyncMock()
+    mock_llm.ainvoke = AsyncMock(return_value=mock_result)
+
+    with patch("src.api.endpoints.get_llm", return_value=mock_llm):
+        suggestions = asyncio.run(
+            _generate_suggestions("What is LangGraph?", "LangGraph is a library...", "topics: graphs, agents")
+        )
+
+    assert isinstance(suggestions, list)
+    assert len(suggestions) == 3
+    assert suggestions[0] == "What are the limitations?"
+    assert suggestions[1] == "How does it compare to X?"
+    assert suggestions[2] == "What are real-world use cases?"
+
+
+def test_generate_suggestions_returns_empty_on_error():
+    """_generate_suggestions returns [] when the LLM raises an exception."""
+    from src.api.endpoints import _generate_suggestions
+
+    mock_llm = AsyncMock()
+    mock_llm.ainvoke = AsyncMock(side_effect=Exception("LLM unavailable"))
+
+    with patch("src.api.endpoints.get_llm", return_value=mock_llm):
+        suggestions = asyncio.run(
+            _generate_suggestions("What is LangGraph?", "Some answer", "context")
+        )
+
+    assert suggestions == []
+
+
+def test_followup_stream_includes_suggestions_event():
+    """The followup SSE stream emits a 'suggestions' event after citations."""
+    mock_chunk = MagicMock()
+    mock_chunk.content = "Here is the answer."
+
+    mock_llm = MagicMock()
+    mock_llm.astream = MagicMock(return_value=_async_iter([mock_chunk]))
+
+    mock_suggestions_llm = AsyncMock()
+    mock_suggestions_result = MagicMock()
+    mock_suggestions_result.content = "1. Question one?\n2. Question two?\n3. Question three?"
+    mock_suggestions_llm.ainvoke = AsyncMock(return_value=mock_suggestions_result)
+
+    mock_session = Session(
+        session_id="session-1",
+        runs=[SessionRun(run_id="run-1", query="q", source_urls=[], report="", created_at="2026")],
+        conversation=[],
+        created_at="2026",
+    )
+
+    def get_llm_side_effect(temperature=0.2):
+        if temperature == 0.7:
+            return mock_suggestions_llm
+        return mock_llm
+
+    with (
+        patch("src.api.endpoints.get_session", new=AsyncMock(return_value=mock_session)),
+        patch("src.api.endpoints.VectorStoreManager"),
+        patch("src.api.endpoints.append_turn", new=AsyncMock(return_value=None)),
+        patch("src.api.endpoints.get_llm", side_effect=get_llm_side_effect),
+    ):
+        response = client.post(
+            "/sessions/session-1/followup",
+            json={"question": "What did you find?", "run_id": "run-1"},
+        )
+
+    assert response.status_code == 200
+    assert "text/event-stream" in response.headers["content-type"]
+
+    events = [
+        json.loads(line[6:])
+        for line in response.text.splitlines()
+        if line.startswith("data: ")
+    ]
+    event_types = [e["type"] for e in events]
+    assert "suggestions" in event_types
+
+    suggestions_event = next(e for e in events if e["type"] == "suggestions")
+    assert isinstance(suggestions_event["suggestions"], list)
+    assert len(suggestions_event["suggestions"]) > 0
+
+    # suggestions must appear before done
+    suggestions_idx = event_types.index("suggestions")
+    done_idx = event_types.index("done")
+    assert suggestions_idx < done_idx
+
+
+async def _async_iter_impl(items):
+    for item in items:
+        yield item
+
+
+def _async_iter(items):
+    return _async_iter_impl(items)

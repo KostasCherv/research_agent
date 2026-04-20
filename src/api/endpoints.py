@@ -217,6 +217,36 @@ async def _record_session_run(
             logger.warning("[session] could not save source chunks: %s", exc)
 
 
+async def _generate_suggestions(query: str, answer: str, context: str) -> list[str]:
+    """Generate 2-3 follow-up question suggestions based on the Q&A."""
+    try:
+        llm = get_llm(temperature=0.7)
+        prompt = (
+            f"Based on this question and answer, generate exactly 3 concise follow-up questions "
+            f"a user might ask. Return ONLY a numbered list (1. ... 2. ... 3. ...), no preamble.\n\n"
+            f"Question: {query}\n\n"
+            f"Answer: {answer[:1000]}\n\n"
+            f"Context topics: {context[:500]}"
+        )
+        result = await llm.ainvoke(prompt)
+        lines = result.content.strip().split("\n")
+        suggestions = []
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+            # Strip numbering: "1. ", "1) ", "- "
+            for prefix in ["1. ", "2. ", "3. ", "1) ", "2) ", "3) ", "- "]:
+                if line.startswith(prefix):
+                    line = line[len(prefix):]
+                    break
+            if line:
+                suggestions.append(line)
+        return suggestions[:3]
+    except Exception:
+        return []
+
+
 async def _stream_followup(
     session: Session,
     user_id: str,
@@ -285,6 +315,12 @@ async def _stream_followup(
     await append_turn(user_id=user_id, session_id=session.session_id, turn=assistant_turn)
 
     yield f"data: {json.dumps({'type': 'citations', 'citations': citations})}\n\n"
+
+    # Generate and emit follow-up suggestions
+    suggestions = await _generate_suggestions(question, full_answer, context_block)
+    if suggestions:
+        yield f"data: {json.dumps({'type': 'suggestions', 'suggestions': suggestions})}\n\n"
+
     yield f"data: {json.dumps({'type': 'done'})}\n\n"
 
 
