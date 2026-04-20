@@ -225,13 +225,11 @@ export function FollowupChat({
         <div ref={bottomRef} />
       </div>
 
-      {!streaming && (
-        <SuggestionChips
-          suggestions={latestSuggestions}
-          onSelect={(text) => void submit(text)}
-          disabled={streaming}
-        />
-      )}
+      <SuggestionChips
+        suggestions={latestSuggestions}
+        onSelect={(text) => void submit(text)}
+        disabled={streaming}
+      />
 
       {error && <p className="error-banner followup-error">{error}</p>}
 
