@@ -40,6 +40,8 @@ function App() {
   const [runId, setRunId] = useState<string | null>(null)
   const [conversation, setConversation] = useState<ConversationTurn[]>([])
   const [userSessions, setUserSessions] = useState<SessionSummary[]>([])
+  const [sessionTitleFilter, setSessionTitleFilter] = useState('')
+  const [sessionDateFilter, setSessionDateFilter] = useState('')
   const [renameSessionId, setRenameSessionId] = useState<string | null>(null)
   const [renameTitleInput, setRenameTitleInput] = useState('')
   const [isRenaming, setIsRenaming] = useState(false)
@@ -315,6 +317,14 @@ function App() {
     setLastQuery('')
   }, [])
 
+  const filteredSessions = useMemo(() => {
+    let result = userSessions
+    const q = sessionTitleFilter.trim().toLowerCase()
+    if (q) result = result.filter((s) => s.title.toLowerCase().includes(q))
+    if (sessionDateFilter) result = result.filter((s) => s.created_at.startsWith(sessionDateFilter))
+    return result
+  }, [userSessions, sessionTitleFilter, sessionDateFilter])
+
   const healthIndicator = useMemo(() => {
     if (health === 'loading') {
       return {
@@ -354,11 +364,32 @@ function App() {
         authSession ? (
           <div className="sessions-menu">
             <h2>Past sessions</h2>
+            {userSessions.length > 0 && (
+              <div className="sessions-filter">
+                <input
+                  className="sessions-filter-input"
+                  type="search"
+                  placeholder="Search by title…"
+                  value={sessionTitleFilter}
+                  onChange={(e) => setSessionTitleFilter(e.target.value)}
+                  aria-label="Filter sessions by title"
+                />
+                <input
+                  className="sessions-filter-input"
+                  type="date"
+                  value={sessionDateFilter}
+                  onChange={(e) => setSessionDateFilter(e.target.value)}
+                  aria-label="Filter sessions by date"
+                />
+              </div>
+            )}
             {userSessions.length === 0 ? (
               <p className="sessions-empty">No sessions yet.</p>
+            ) : filteredSessions.length === 0 ? (
+              <p className="sessions-empty">No sessions match your filters.</p>
             ) : (
               <ul className="sessions-list">
-                {userSessions.map((s) => (
+                {filteredSessions.map((s) => (
                   <li key={s.session_id}>
                     <button
                       type="button"

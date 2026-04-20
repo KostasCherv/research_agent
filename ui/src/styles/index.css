@@ -114,6 +114,34 @@ p {
   margin-bottom: 0.8rem;
 }
 
+.sessions-filter {
+  display: grid;
+  gap: 0.4rem;
+  margin-bottom: 0.75rem;
+}
+
+.sessions-filter-input {
+  width: 100%;
+  border-radius: 8px;
+  border: 1px solid rgba(184, 197, 255, 0.22);
+  background: rgba(9, 13, 26, 0.55);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 0.82rem;
+  padding: 0.4rem 0.55rem;
+  box-sizing: border-box;
+}
+
+.sessions-filter-input:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+.sessions-filter-input[type='date']::-webkit-calendar-picker-indicator {
+  filter: invert(0.7);
+  cursor: pointer;
+}
+
 .sessions-empty {
   color: var(--text-muted);
   font-size: 0.86rem;
