@@ -131,6 +131,12 @@ Session UX:
 - Double-click a session title to rename it.
 - Right-click a session entry to open the context menu (rename/delete).
 
+Run backend + frontend with one command:
+
+```bash
+bash scripts/dev.sh
+```
+
 Run backend + frontend together (two terminals):
 
 ```bash
