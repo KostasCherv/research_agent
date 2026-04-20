@@ -305,6 +305,11 @@ async def _stream_followup(
             seen.add(url)
             citations.append({"source_url": url, "source_title": c["source_title"]})
 
+    yield f"data: {json.dumps({'type': 'citations', 'citations': citations})}\n\n"
+
+    # Generate suggestions before persisting so they are stored with the turn
+    suggestions = await _generate_suggestions(question, full_answer, context_block)
+
     # Record turns in conversation history
     user_turn = ConversationTurn(role="user", content=question, run_id=run_id)
     assistant_turn = ConversationTurn(
@@ -312,16 +317,13 @@ async def _stream_followup(
         content=full_answer,
         run_id=run_id,
         citations=citations,
+        suggestions=suggestions,
     )
     session.conversation.append(user_turn)
     session.conversation.append(assistant_turn)
     await append_turn(user_id=user_id, session_id=session.session_id, turn=user_turn)
     await append_turn(user_id=user_id, session_id=session.session_id, turn=assistant_turn)
 
-    yield f"data: {json.dumps({'type': 'citations', 'citations': citations})}\n\n"
-
-    # Generate and emit follow-up suggestions
-    suggestions = await _generate_suggestions(question, full_answer, context_block)
     if suggestions:
         yield f"data: {json.dumps({'type': 'suggestions', 'suggestions': suggestions})}\n\n"
 

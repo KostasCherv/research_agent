@@ -121,6 +121,7 @@ export function FollowupChat({
 
     let accumulatedAnswer = ''
     let finalCitations: Citation[] = []
+    let pendingSuggestions: string[] = []
 
     try {
       await streamFollowup(sessionId, q, runId, accessToken, {
@@ -137,7 +138,10 @@ export function FollowupChat({
           }
         },
         onSuggestions: (suggestions) => {
-          if (!controller.signal.aborted) setLatestSuggestions(suggestions)
+          if (!controller.signal.aborted) {
+            pendingSuggestions = suggestions
+            setLatestSuggestions(suggestions)
+          }
         },
         onDone: () => {
           const assistantTurn: ConversationTurn = {
@@ -145,6 +149,7 @@ export function FollowupChat({
             content: accumulatedAnswer,
             run_id: runId,
             citations: finalCitations,
+            suggestions: pendingSuggestions,
             created_at: new Date().toISOString(),
           }
           onConversationUpdate(assistantTurn)
@@ -231,7 +236,11 @@ export function FollowupChat({
       </div>
 
       <SuggestionChips
-        suggestions={latestSuggestions}
+        suggestions={
+          latestSuggestions.length > 0
+            ? latestSuggestions
+            : ([...conversation].reverse().find((t) => t.role === 'assistant')?.suggestions ?? [])
+        }
         onSelect={(text) => void submit(text)}
         disabled={streaming}
       />

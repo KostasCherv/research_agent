@@ -434,6 +434,7 @@ function App() {
       />
       {report && sessionId && (
         <FollowupChat
+          key={sessionId}
           sessionId={sessionId}
           runId={runId}
           accessToken={authSession?.access_token ?? null}

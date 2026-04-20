@@ -136,7 +136,7 @@ class SupabaseSessionStore:
             "GET",
             "conversation_turns",
             params={
-                "select": "role,content,run_id,citations,created_at",
+                "select": "role,content,run_id,citations,suggestions,created_at",
                 "session_id": f"eq.{session_id}",
                 "user_id": f"eq.{user_id}",
                 "order": "created_at.asc",
@@ -149,6 +149,7 @@ class SupabaseSessionStore:
                 content=row.get("content", ""),
                 run_id=row.get("run_id"),
                 citations=row.get("citations") or [],
+                suggestions=row.get("suggestions") or [],
                 created_at=row.get("created_at", ""),
             )
             for row in turn_rows
@@ -234,6 +235,7 @@ class SupabaseSessionStore:
             "role": turn.role,
             "content": turn.content,
             "citations": turn.citations,
+            "suggestions": turn.suggestions,
             "created_at": turn.created_at,
         }
         await self._request("POST", "conversation_turns", json_body=payload)

@@ -33,6 +33,7 @@ class ConversationTurn:
     content: str
     run_id: str | None = None
     citations: list[dict] = field(default_factory=list)
+    suggestions: list[str] = field(default_factory=list)
     created_at: str = field(default_factory=lambda: datetime.now(UTC).isoformat())
 
     def to_dict(self) -> dict:
@@ -41,6 +42,7 @@ class ConversationTurn:
             "content": self.content,
             "run_id": self.run_id,
             "citations": self.citations,
+            "suggestions": self.suggestions,
             "created_at": self.created_at,
         }
 
