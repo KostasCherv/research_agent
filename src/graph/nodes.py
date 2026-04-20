@@ -294,7 +294,7 @@ def report_node(state: ResearchState) -> ResearchState:
 
 
 def vector_store_node(state: ResearchState) -> ResearchState:
-    """Persist the final report to ChromaDB (runs only when enabled).
+    """Persist the final report to Pinecone (runs only when enabled).
 
     This node is a no-op if ``use_vector_store`` is False.
     """
@@ -312,7 +312,7 @@ def vector_store_node(state: ResearchState) -> ResearchState:
         query = state.get("query", "")
         metadata = state.get("report_metadata", {})
 
-        logger.info("[vector_store_node] saving report to Chroma")
+        logger.info("[vector_store_node] saving report to Pinecone")
         manager = VectorStoreManager()
         try:
             with start_step_span(

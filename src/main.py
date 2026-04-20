@@ -18,7 +18,7 @@ console = Console()
 def search(
     query: str = typer.Argument(..., help="Research query to investigate."),
     vector_store: bool = typer.Option(
-        False, "--vector-store", "-v", help="Persist the report to ChromaDB."
+        False, "--vector-store", "-v", help="Persist the report to Pinecone."
     ),
     output: str = typer.Option(
         "", "--output", "-o", help="Optional file path to save the markdown report."

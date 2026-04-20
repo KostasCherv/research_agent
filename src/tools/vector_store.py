@@ -7,19 +7,17 @@ from typing import Optional
 
 from src.config import settings
 from src.errors import VectorStoreError
+from src.llm.embeddings import EmbeddingClient
 
 logger = logging.getLogger(__name__)
 
 # Characters per chunk when splitting source text for run-scoped retrieval
 _CHUNK_SIZE = 1000
-# Max texts per OpenAI embeddings API call
+# Max texts per embedding API call
 _EMBED_BATCH_SIZE = 500
 # Pinecone namespaces
 _NAMESPACE_REPORTS = "reports"
 _NAMESPACE_CHUNKS = "source_chunks"
-# OpenAI embedding model and its output dimension
-_EMBED_MODEL = "text-embedding-3-small"
-_EMBED_DIM = 1536
 # Pinecone metadata value size limit (bytes); truncate document text to stay under 40KB
 _META_TEXT_LIMIT = 38_000
 
@@ -29,7 +27,9 @@ class VectorStoreManager:
 
     def __init__(self) -> None:
         self._index: Optional[object] = None
-        self._openai_client: Optional[object] = None
+        self._pinecone_client: Optional[object] = None
+        self._embedding_client: Optional[EmbeddingClient] = None
+        self._index_dimension_validated = False
 
     # ------------------------------------------------------------------
     # Private helpers
@@ -47,27 +47,69 @@ class VectorStoreManager:
         from pinecone import Pinecone
 
         pc = Pinecone(api_key=settings.pinecone_api_key)
+        self._pinecone_client = pc
         self._index = pc.Index(settings.pinecone_index_name)
         return self._index
 
     def _embed(self, texts: list[str]) -> list[list[float]]:
-        """Return embeddings for *texts* using OpenAI text-embedding-3-small."""
-        if self._openai_client is None:
-            from openai import OpenAI
-
-            self._openai_client = OpenAI(api_key=settings.openai_api_key)
+        """Return embeddings for *texts* using the configured provider."""
+        if self._embedding_client is None:
+            self._embedding_client = EmbeddingClient()
 
         embeddings: list[list[float]] = []
         for batch_start in range(0, len(texts), _EMBED_BATCH_SIZE):
             batch = texts[batch_start : batch_start + _EMBED_BATCH_SIZE]
             try:
-                response = self._openai_client.embeddings.create(
-                    input=batch, model=_EMBED_MODEL
-                )
+                embeddings.extend(self._embedding_client.embed_texts(batch))
+            except VectorStoreError:
+                raise
             except Exception as exc:
                 raise VectorStoreError(f"Embedding request failed: {exc}") from exc
-            embeddings.extend([item.embedding for item in response.data])
         return embeddings
+
+    def _extract_index_dimension(self, index_info: object) -> int | None:
+        """Best-effort extraction of a Pinecone index dimension from SDK responses."""
+        if hasattr(index_info, "dimension"):
+            dimension = getattr(index_info, "dimension")
+            if isinstance(dimension, int):
+                return dimension
+
+        if isinstance(index_info, dict):
+            dimension = index_info.get("dimension")
+            if isinstance(dimension, int):
+                return dimension
+
+        return None
+
+    def _validate_index_dimension(self) -> None:
+        """Ensure the configured Pinecone index matches the embedding dimensions."""
+        if self._index_dimension_validated:
+            return
+
+        self._ensure_index()
+        if self._pinecone_client is None:
+            raise VectorStoreError("Pinecone client is not initialized.")
+
+        try:
+            index_info = self._pinecone_client.describe_index(settings.pinecone_index_name)
+        except Exception as exc:
+            raise VectorStoreError(f"Failed to inspect Pinecone index: {exc}") from exc
+
+        index_dimension = self._extract_index_dimension(index_info)
+        if index_dimension is None:
+            raise VectorStoreError(
+                "Failed to inspect Pinecone index: index dimension was not available."
+            )
+
+        if index_dimension != settings.embedding_dimensions:
+            raise VectorStoreError(
+                "Pinecone index "
+                f"'{settings.pinecone_index_name}' dimension {index_dimension} does not match "
+                f"the configured embedding dimensions {settings.embedding_dimensions}. "
+                "Use a matching index or reindex existing data for this embedding model."
+            )
+
+        self._index_dimension_validated = True
 
     # ------------------------------------------------------------------
     # Public interface
@@ -88,6 +130,7 @@ class VectorStoreManager:
             VectorStoreError: On any Pinecone or embedding error.
         """
         try:
+            self._validate_index_dimension()
             doc_id = f"report_{datetime.now(UTC).strftime('%Y%m%d%H%M%S%f')}"
             doc_text = report[:_META_TEXT_LIMIT]
             if len(report) > _META_TEXT_LIMIT:
@@ -128,6 +171,7 @@ class VectorStoreManager:
             VectorStoreError: On any Pinecone or embedding error.
         """
         try:
+            self._validate_index_dimension()
             embedding = self._embed([query])
             response = self._ensure_index().query(
                 vector=embedding[0],
@@ -173,6 +217,7 @@ class VectorStoreManager:
             Number of chunks saved.
         """
         try:
+            self._validate_index_dimension()
             ids: list[str] = []
             texts: list[str] = []
             metadatas: list[dict] = []
@@ -246,6 +291,7 @@ class VectorStoreManager:
             ``chunk_index`` keys.
         """
         try:
+            self._validate_index_dimension()
             embedding = self._embed([query])
             response = self._ensure_index().query(
                 vector=embedding[0],
