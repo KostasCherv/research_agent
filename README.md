@@ -158,6 +158,19 @@ python -m src.main serve --reload
 npx --ignore-scripts=false inngest-cli@latest dev -u http://127.0.0.1:8000/api/inngest --no-discovery
 ```
 
+### Outbox dispatcher
+
+Uploads write to an `event_outbox` table before dispatching to Inngest, so no events are lost if the API restarts or the Inngest endpoint is temporarily unreachable.
+
+Dispatch pending events on-demand:
+
+```bash
+python -m src.main rag-dispatch-outbox          # dispatch up to 50 pending events
+python -m src.main rag-dispatch-outbox --limit 100
+```
+
+For production, run the dispatcher on a schedule (cron, Inngest cron function, or a simple loop). The dispatcher is safe to run concurrently — each event is claimed atomically before being sent, so duplicate dispatches are prevented. Events stuck in `dispatching` state for more than 5 minutes are automatically reset to `pending` and retried on the next run.
+
 ```mermaid
 flowchart LR
     browser["Browser UI (React/Vite)"] -->|"POST /sessions (create)"| api["FastAPI API"]

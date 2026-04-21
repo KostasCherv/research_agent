@@ -251,8 +251,6 @@ async def create_resource_and_ingest(file: UploadFile, user_id: str) -> tuple[Ra
         created_at=now,
         updated_at=now,
     )
-    await _get_store().create_rag_resource(resource.to_dict())
-
     job = RagIngestionJob(
         job_id=str(uuid.uuid4()),
         resource_id=resource_id,
@@ -261,40 +259,26 @@ async def create_resource_and_ingest(file: UploadFile, user_id: str) -> tuple[Ra
         status="queued",
         stage="queued",
     )
-    await _get_store().create_rag_ingestion_job(job.to_dict())
-    await _dispatch_ingestion_job(job)
+    outbox_id = str(uuid.uuid4())
+    outbox_now = datetime.now(UTC).isoformat()
+    await _get_store().create_resource_job_and_outbox(
+        resource_payload=resource.to_dict(),
+        job_payload=job.to_dict(),
+        outbox_payload={
+            "id": outbox_id,
+            "event_name": "rag/ingestion.requested",
+            "payload": {
+                "job_id": job.job_id,
+                "resource_id": job.resource_id,
+                "owner_id": job.owner_id,
+                "workspace_id": job.workspace_id,
+            },
+            "next_attempt_at": outbox_now,
+            "created_at": outbox_now,
+        },
+    )
 
     return resource, job
-
-
-async def _dispatch_ingestion_job(job: RagIngestionJob) -> None:
-    """Send ingestion event via Inngest SDK. Marks job failed if send raises."""
-    import inngest
-
-    from src.inngest_client import inngest_client
-
-    try:
-        await inngest_client.send(
-            inngest.Event(
-                name="rag/ingestion.requested",
-                data={
-                    "job_id": job.job_id,
-                    "resource_id": job.resource_id,
-                    "owner_id": job.owner_id,
-                    "workspace_id": job.workspace_id,
-                },
-            )
-        )
-    except Exception as exc:
-        await _get_store().update_rag_ingestion_job(
-            job.job_id,
-            {
-                "status": "failed",
-                "stage": "dispatch_failed",
-                "error_details": str(exc),
-            },
-        )
-        raise
 
 
 async def _run_ingestion_job(job_id: str) -> None:

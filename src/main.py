@@ -130,6 +130,17 @@ def serve(
 
 
 @app.command()
+def rag_dispatch_outbox(
+    limit: int = typer.Option(50, "--limit", help="Max events to dispatch per run."),
+):
+    """Dispatch pending outbox events to Inngest (run from cron or on-demand)."""
+    from src.outbox import dispatch_outbox_events
+
+    sent = asyncio.run(dispatch_outbox_events(limit=limit))
+    console.print(f"[green]Dispatched {sent} outbox event(s)[/green]")
+
+
+@app.command()
 def rag_process_job(
     job_id: str = typer.Argument(..., help="RAG ingestion job ID to process once."),
 ):

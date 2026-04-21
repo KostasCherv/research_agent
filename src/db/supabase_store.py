@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
 import httpx
@@ -485,6 +485,91 @@ class SupabaseSessionStore:
         )
         rows = response.json()
         return bool(rows)
+
+    # ------------------------------------------------------------------
+    # Event outbox
+    # ------------------------------------------------------------------
+
+    async def create_resource_job_and_outbox(
+        self,
+        resource_payload: dict[str, Any],
+        job_payload: dict[str, Any],
+        outbox_payload: dict[str, Any],
+    ) -> None:
+        """Atomically insert resource + ingestion job + outbox event in one DB transaction."""
+        await self._request(
+            "POST",
+            "rpc/create_resource_job_and_outbox",
+            json_body={
+                "p_resource": resource_payload,
+                "p_job": job_payload,
+                "p_outbox": outbox_payload,
+            },
+        )
+
+    async def claim_outbox_event(self, event_id: str) -> bool:
+        """Atomically transition an outbox event from pending -> dispatching.
+
+        Returns True if the claim succeeded, False if another dispatcher already claimed it.
+        """
+        response = await self._request(
+            "PATCH",
+            "event_outbox",
+            params={"id": f"eq.{event_id}", "status": "eq.pending"},
+            json_body={
+                "status": "dispatching",
+                "dispatched_at": datetime.now(UTC).isoformat(),
+            },
+            extra_headers={"Prefer": "return=representation"},
+        )
+        return bool(response.json())
+
+    async def reset_stuck_dispatching_events(self, older_than_seconds: int = 300) -> None:
+        """Reset dispatching rows stuck longer than the threshold back to pending."""
+        cutoff = (datetime.now(UTC) - timedelta(seconds=older_than_seconds)).isoformat()
+        await self._request(
+            "PATCH",
+            "event_outbox",
+            params={"status": "eq.dispatching", "dispatched_at": f"lt.{cutoff}"},
+            json_body={"status": "pending"},
+        )
+
+    async def insert_outbox_event(self, payload: dict[str, Any]) -> None:
+        body = {
+            "id": payload["id"],
+            "event_name": payload["event_name"],
+            "payload": payload["payload"],
+            "status": "pending",
+            "attempts": 0,
+            "next_attempt_at": payload.get("next_attempt_at", datetime.now(UTC).isoformat()),
+            "created_at": payload.get("created_at", datetime.now(UTC).isoformat()),
+        }
+        await self._request("POST", "event_outbox", json_body=body)
+
+    async def fetch_pending_outbox_events(self, *, limit: int = 50) -> list[dict[str, Any]]:
+        response = await self._request(
+            "GET",
+            "event_outbox",
+            params={
+                "select": (
+                    "id,event_name,payload,status,attempts,last_error,"
+                    "next_attempt_at,created_at,sent_at"
+                ),
+                "status": "eq.pending",
+                "next_attempt_at": f"lte.{datetime.now(UTC).isoformat()}",
+                "order": "created_at.asc",
+                "limit": str(limit),
+            },
+        )
+        return response.json()
+
+    async def update_outbox_event(self, event_id: str, patch: dict[str, Any]) -> None:
+        await self._request(
+            "PATCH",
+            "event_outbox",
+            params={"id": f"eq.{event_id}"},
+            json_body=patch,
+        )
 
     async def upsert_rag_sidecar_artifact(
         self,

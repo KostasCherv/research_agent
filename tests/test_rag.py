@@ -130,7 +130,7 @@ async def test_process_queued_ingestion_jobs_processes_all_selected_jobs():
     assert mock_run.await_count == 2
 
 
-async def test_create_resource_dispatches_inngest_event():
+async def test_create_resource_writes_outbox_event():
     file = UploadFile(
         filename="notes.txt",
         file=BytesIO(b"hello world"),
@@ -141,30 +141,23 @@ async def test_create_resource_dispatches_inngest_event():
     mock_storage = AsyncMock()
     mock_storage.upload_bytes = AsyncMock(return_value="supabase://rag-resources/user-1/path")
 
-    mock_inngest_client = AsyncMock()
-    mock_inngest_client.send = AsyncMock(return_value=["event-id-1"])
-
-    sent_events: list = []
-
-    async def capture_send(event):
-        sent_events.append(event)
-        return ["event-id-1"]
-
-    mock_inngest_client.send.side_effect = capture_send
-
     with (
         patch("src.rag._get_store", return_value=mock_store),
         patch("src.rag._get_storage", return_value=mock_storage),
-        patch("src.inngest_client.inngest_client", mock_inngest_client),
     ):
         resource, job = await create_resource_and_ingest(file, "user-1")
 
-    assert mock_inngest_client.send.await_count == 1
-    event = sent_events[0]
-    assert event.data["job_id"] == job.job_id
-    assert event.data["resource_id"] == resource.resource_id
-    assert event.data["owner_id"] == "user-1"
-    assert "workspace_id" in event.data
+    assert mock_store.create_resource_job_and_outbox.await_count == 1
+    call_kwargs = mock_store.create_resource_job_and_outbox.await_args.kwargs
+    outbox = call_kwargs["outbox_payload"]
+    assert outbox["event_name"] == "rag/ingestion.requested"
+    assert outbox["payload"]["job_id"] == job.job_id
+    assert outbox["payload"]["resource_id"] == resource.resource_id
+    assert outbox["payload"]["owner_id"] == "user-1"
+    assert "workspace_id" in outbox["payload"]
+    # resource and job must NOT be written separately — the RPC handles everything
+    mock_store.create_rag_resource.assert_not_awaited()
+    mock_store.create_rag_ingestion_job.assert_not_awaited()
 
 
 async def test_claim_succeeds_for_queued_job_and_fails_on_second_attempt():
