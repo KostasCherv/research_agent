@@ -212,9 +212,23 @@ def test_startup_validation_does_not_fail_without_supabase_configuration():
         patch("src.api.endpoints.settings.supabase_url", ""),
         patch("src.api.endpoints.settings.supabase_service_role_key", ""),
         patch("src.api.endpoints.ensure_store_initialized") as mock_init,
+        patch("src.api.endpoints.ensure_rag_storage_ready", new=AsyncMock()) as mock_storage_ready,
     ):
         asyncio.run(app.router.on_startup[0]())
         mock_init.assert_not_called()
+        mock_storage_ready.assert_not_awaited()
+
+
+def test_startup_validation_checks_rag_storage_when_supabase_configured():
+    with (
+        patch("src.api.endpoints.settings.supabase_url", "https://example.supabase.co"),
+        patch("src.api.endpoints.settings.supabase_service_role_key", "service-role"),
+        patch("src.api.endpoints.ensure_store_initialized") as mock_init,
+        patch("src.api.endpoints.ensure_rag_storage_ready", new=AsyncMock()) as mock_storage_ready,
+    ):
+        asyncio.run(app.router.on_startup[0]())
+        mock_init.assert_called_once()
+        mock_storage_ready.assert_awaited_once()
 
 
 # ---------------------------------------------------------------------------

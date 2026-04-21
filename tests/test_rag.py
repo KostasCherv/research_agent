@@ -52,10 +52,13 @@ async def test_run_ingestion_job_marks_ready_on_success():
 
     mock_sidecar = AsyncMock()
     mock_sidecar.ingest = AsyncMock(return_value={"status": "ok"})
+    mock_storage = AsyncMock()
+    mock_storage.create_signed_download_url = AsyncMock(return_value="https://signed-url")
 
     with (
         patch("src.rag._get_store", return_value=mock_store),
         patch("src.rag._get_sidecar", return_value=mock_sidecar),
+        patch("src.rag._get_storage", return_value=mock_storage),
     ):
         await _run_ingestion_job("job-1")
 
@@ -97,10 +100,13 @@ async def test_run_ingestion_job_marks_failed_after_retries():
 
     mock_sidecar = AsyncMock()
     mock_sidecar.ingest = AsyncMock(side_effect=RuntimeError("ingest failed"))
+    mock_storage = AsyncMock()
+    mock_storage.create_signed_download_url = AsyncMock(return_value="https://signed-url")
 
     with (
         patch("src.rag._get_store", return_value=mock_store),
         patch("src.rag._get_sidecar", return_value=mock_sidecar),
+        patch("src.rag._get_storage", return_value=mock_storage),
     ):
         await _run_ingestion_job("job-1")
 

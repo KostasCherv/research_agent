@@ -48,6 +48,7 @@ from src.rag import (
     retrieve_context_for_query,
     update_agent as update_rag_agent_record,
 )
+from src.storage import ensure_rag_storage_ready
 
 logger = logging.getLogger(__name__)
 
@@ -86,6 +87,10 @@ async def validate_session_store_configuration() -> None:
         return
 
     ensure_store_initialized()
+    try:
+        await ensure_rag_storage_ready()
+    except Exception as exc:
+        logger.warning("[startup] RAG storage readiness check failed: %s", exc)
 
 
 # ---------------------------------------------------------------------------

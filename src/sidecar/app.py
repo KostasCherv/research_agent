@@ -8,10 +8,13 @@ from __future__ import annotations
 
 import json
 import re
+from io import BytesIO
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
+import httpx
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
@@ -70,21 +73,30 @@ def _chunk_text(text: str, chunk_size: int = 1200, overlap: int = 150) -> list[s
     return chunks
 
 
-def _extract_text(file_locator: str) -> str:
+async def _read_locator_bytes(file_locator: str) -> tuple[bytes, str]:
+    parsed = urlparse(file_locator)
+    if parsed.scheme in {"http", "https"}:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.get(file_locator)
+        response.raise_for_status()
+        return response.content, Path(parsed.path).suffix.lower()
+
     path = Path(file_locator)
     if not path.exists():
         raise FileNotFoundError(f"File not found: {file_locator}")
+    return path.read_bytes(), path.suffix.lower()
 
-    suffix = path.suffix.lower()
+
+def _extract_text_from_bytes(content: bytes, suffix: str) -> str:
     if suffix in {".txt", ".md"}:
-        return path.read_text(encoding="utf-8", errors="ignore")
+        return content.decode("utf-8", errors="ignore")
 
     if suffix == ".pdf":
         try:
             from pypdf import PdfReader
         except Exception as exc:
             raise RuntimeError("pypdf is required for PDF ingestion") from exc
-        reader = PdfReader(str(path))
+        reader = PdfReader(BytesIO(content))
         return "\n".join((page.extract_text() or "") for page in reader.pages)
 
     if suffix == ".docx":
@@ -92,7 +104,7 @@ def _extract_text(file_locator: str) -> str:
             from docx import Document
         except Exception as exc:
             raise RuntimeError("python-docx is required for DOCX ingestion") from exc
-        doc = Document(str(path))
+        doc = Document(BytesIO(content))
         return "\n".join(paragraph.text for paragraph in doc.paragraphs)
 
     raise RuntimeError(f"Unsupported file type in sidecar: {suffix}")
@@ -138,7 +150,8 @@ async def ingest(body: IngestRequest):
     )
 
     try:
-        text = _extract_text(body.file_locator)
+        content, suffix = await _read_locator_bytes(body.file_locator)
+        text = _extract_text_from_bytes(content, suffix)
         chunks = _chunk_text(text)
         record = {
             "resource_id": body.resource_id,

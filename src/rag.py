@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -13,6 +12,7 @@ from fastapi import UploadFile
 from src.config import settings
 from src.db.supabase_store import SupabaseSessionStore
 from src.rag_sidecar import RagQueryResult, RagSidecarClient
+from src.storage import SupabaseStorageAdapter
 
 
 ALLOWED_EXTENSIONS = {".pdf", ".docx", ".txt", ".md"}
@@ -144,6 +144,7 @@ class RagValidationError(Exception):
 
 _store: SupabaseSessionStore | None = None
 _sidecar: RagSidecarClient | None = None
+_storage: SupabaseStorageAdapter | None = None
 
 
 def _workspace_id_for_user(user_id: str) -> str:
@@ -164,12 +165,11 @@ def _get_sidecar() -> RagSidecarClient:
     return _sidecar
 
 
-def _resource_storage_path(resource_id: str, owner_id: str, filename: str) -> Path:
-    safe_filename = filename.replace("/", "_").replace("\\", "_")
-    base = Path(settings.rag_upload_directory).expanduser().resolve()
-    owner_dir = base / owner_id
-    owner_dir.mkdir(parents=True, exist_ok=True)
-    return owner_dir / f"{resource_id}_{safe_filename}"
+def _get_storage() -> SupabaseStorageAdapter:
+    global _storage
+    if _storage is None:
+        _storage = SupabaseStorageAdapter()
+    return _storage
 
 
 def _validate_upload(file: UploadFile, content: bytes) -> None:
@@ -234,8 +234,12 @@ async def create_resource_and_ingest(file: UploadFile, user_id: str) -> tuple[Ra
 
     resource_id = str(uuid.uuid4())
     filename = file.filename or f"resource-{resource_id}.txt"
-    storage_path = _resource_storage_path(resource_id, user_id, filename)
-    storage_path.write_bytes(content)
+    storage_key = f"{workspace_id}/{user_id}/{resource_id}/{filename}"
+    storage_uri = await _get_storage().upload_bytes(
+        key=storage_key,
+        content=content,
+        content_type=file.content_type or "application/octet-stream",
+    )
 
     now = datetime.now(UTC).isoformat()
     resource = RagResource(
@@ -245,7 +249,7 @@ async def create_resource_and_ingest(file: UploadFile, user_id: str) -> tuple[Ra
         filename=filename,
         mime_type=file.content_type or "application/octet-stream",
         byte_size=len(content),
-        storage_uri=str(storage_path),
+        storage_uri=storage_uri,
         state="uploaded",
         created_at=now,
         updated_at=now,
@@ -312,9 +316,13 @@ async def _run_ingestion_job(job_id: str) -> None:
         )
 
         try:
+            signed_file_url = await _get_storage().create_signed_download_url(
+                storage_uri=resource.storage_uri,
+                expires_in=settings.rag_signed_url_ttl_seconds,
+            )
             await sidecar.ingest(
                 resource_id=resource.resource_id,
-                file_locator=resource.storage_uri,
+                file_locator=signed_file_url,
                 owner_scope=resource.owner_id,
                 workspace_id=resource.workspace_id,
                 job_id=job.job_id,
@@ -418,8 +426,12 @@ async def delete_resource(resource_id: str, user_id: str) -> bool:
         # Sidecar cleanup is best-effort; resource deletion still proceeds.
         pass
 
-    if resource.storage_uri and os.path.exists(resource.storage_uri):
-        os.remove(resource.storage_uri)
+    if resource.storage_uri:
+        try:
+            await _get_storage().delete_object(storage_uri=resource.storage_uri)
+        except Exception:
+            # Object cleanup is best-effort; DB deletion should still proceed.
+            pass
 
     return await _get_store().delete_rag_resource(
         resource_id=resource.resource_id,

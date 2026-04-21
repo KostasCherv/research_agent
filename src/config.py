@@ -12,10 +12,14 @@ class Settings(BaseSettings):
     )
 
     # LLM
-    llm_provider: str = Field(default="openai", description="LLM provider: 'ollama' or 'openai'")
+    llm_provider: str = Field(
+        default="openai", description="LLM provider: 'ollama' or 'openai'"
+    )
     openai_api_key: str = Field(default="", description="OpenAI API key")
     openai_model: str = Field(default="gpt-4o-mini", description="OpenAI model name")
-    ollama_base_url: str = Field(default="http://localhost:11434", description="Ollama base URL")
+    ollama_base_url: str = Field(
+        default="http://localhost:11434", description="Ollama base URL"
+    )
     ollama_model: str = Field(default="llama3.2", description="Ollama model name")
 
     # Search
@@ -24,13 +28,15 @@ class Settings(BaseSettings):
 
     # Vector store (Pinecone)
     pinecone_api_key: str = Field(default="", description="Pinecone API key")
-    pinecone_index_name: str = Field(default="research-agent", description="Pinecone index name")
+    pinecone_index_name: str = Field(
+        default="research-agent", description="Pinecone index name"
+    )
 
     # API
     api_host: str = Field(default="0.0.0.0")
     api_port: int = Field(default=8000)
     cors_origins: list[str] = Field(
-        default=["http://localhost:5173", "http://127.0.0.1:5173"],
+        default=["*"],
         description="Allowed CORS origins. Comma-separated in env: CORS_ORIGINS=https://app.example.com,https://staging.example.com",
     )
     enforce_session_auth: bool = Field(
@@ -108,6 +114,14 @@ class Settings(BaseSettings):
     rag_sidecar_persist_directory: str = Field(
         default="./data/rag_sidecar",
         description="Persistence directory owned by the RAG sidecar service.",
+    )
+    rag_storage_bucket: str = Field(
+        default="rag-resources",
+        description="Supabase Storage bucket used for raw RAG resource files.",
+    )
+    rag_signed_url_ttl_seconds: int = Field(
+        default=600,
+        description="TTL in seconds for Supabase signed download URLs passed to sidecar.",
     )
 
 
