@@ -1,6 +1,6 @@
 """Tests for src/tools/search.py"""
 
-from unittest.mock import patch, MagicMock, call
+from unittest.mock import patch, MagicMock
 import pytest
 
 from src.errors import SearchError

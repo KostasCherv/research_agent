@@ -148,17 +148,14 @@ cd ui
 npm run dev
 ```
 
-Run RAG sidecar + worker (three terminals):
+Run the API and Inngest dev server:
 
 ```bash
 # Terminal 1: main API
 python -m src.main serve --reload
 
-# Terminal 2: RAG sidecar service
-python -m src.main rag-sidecar --reload
-
-# Terminal 3: RAG ingestion worker
-python -m src.main rag-worker
+# Terminal 2: Inngest dev server (routes events to the local app)
+npx --ignore-scripts=false inngest-cli@latest dev -u http://127.0.0.1:8000/api/inngest --no-discovery
 ```
 
 ```mermaid
@@ -273,9 +270,9 @@ You get full observability from input to final report: where time is spent, wher
 | `SUPABASE_JWT_AUDIENCE` | `authenticated` | Expected audience in Supabase access tokens |
 | `SUPABASE_JWT_SECRET` | — | Optional HS256 verification secret used as fallback path |
 | `RAG_STORAGE_BUCKET` | `rag-resources` | Supabase Storage private bucket for uploaded RAG files |
-| `RAG_SIGNED_URL_TTL_SECONDS` | `600` | Signed URL TTL used by worker when sidecar ingests files |
-| `RAG_SIDECAR_BASE_URL` | `http://localhost:8090` | Internal URL for the RAG sidecar service |
-| `RAG_WORKER_POLL_SECONDS` | `2.0` | Poll interval for queued ingestion jobs |
+| `RAG_SIGNED_URL_TTL_SECONDS` | `600` | Signed URL TTL used to pull uploads during ingestion |
+| `INNGEST_DEV` | — | Set to `1` for local dev (disables signing key requirement) |
+| `INNGEST_EVENT_KEY` | — | Inngest event key (required in production) |
 
 Session endpoints now require a bearer token from Supabase Auth. The recommended UI flow is Google OAuth via Supabase on the frontend, then forwarding `Authorization: Bearer <access_token>` for session endpoints.
 Session persistence is intentionally a hard requirement: server startup validates Supabase configuration and fails fast if required vars are missing.

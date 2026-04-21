@@ -87,14 +87,6 @@ class Settings(BaseSettings):
     )
 
     # RAG Agent
-    rag_sidecar_base_url: str = Field(
-        default="http://localhost:8090",
-        description="Base URL for the internal Rag Anything sidecar adapter.",
-    )
-    rag_upload_directory: str = Field(
-        default="./data/rag_uploads",
-        description="Local upload directory used as object storage shim for RAG resources.",
-    )
     rag_max_file_size_mb: int = Field(
         default=25,
         description="Maximum upload size per RAG resource file in megabytes.",
@@ -106,10 +98,6 @@ class Settings(BaseSettings):
     rag_max_resources_per_agent: int = Field(
         default=25,
         description="Maximum number of linked resources allowed per RAG agent.",
-    )
-    rag_worker_poll_seconds: float = Field(
-        default=2.0,
-        description="Polling interval in seconds for the RAG ingestion worker.",
     )
     rag_storage_bucket: str = Field(
         default="rag-resources",

@@ -453,6 +453,26 @@ class SupabaseSessionStore:
         rows = response.json()
         return [self._map_rag_ingestion_row(row) for row in rows]
 
+    async def claim_rag_ingestion_job(self, job_id: str) -> bool:
+        """Atomically transition job status from 'queued' to 'running'.
+
+        Returns True if the claim succeeded (job was queued), False if already claimed.
+        """
+        update_body = {
+            "status": "running",
+            "stage": "claimed",
+            "updated_at": datetime.now(UTC).isoformat(),
+        }
+        response = await self._request(
+            "PATCH",
+            "rag_ingestion_jobs",
+            params={"id": f"eq.{job_id}", "status": "eq.queued"},
+            json_body=update_body,
+            extra_headers={"Prefer": "return=representation"},
+        )
+        rows = response.json()
+        return bool(rows)
+
     async def update_rag_ingestion_job(self, job_id: str, patch: dict[str, Any]) -> bool:
         update_body = dict(patch)
         update_body["updated_at"] = datetime.now(UTC).isoformat()

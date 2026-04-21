@@ -11,7 +11,12 @@ from fastapi import UploadFile
 
 from src.config import settings
 from src.db.supabase_store import SupabaseSessionStore
-from src.rag_sidecar import RagQueryResult, RagSidecarClient
+from src.rag_engine import (
+    RagQueryResult,
+    delete_resource_artifacts,
+    ingest_resource_from_locator,
+    query_resource_context,
+)
 from src.storage import SupabaseStorageAdapter
 
 
@@ -143,7 +148,6 @@ class RagValidationError(Exception):
 
 
 _store: SupabaseSessionStore | None = None
-_sidecar: RagSidecarClient | None = None
 _storage: SupabaseStorageAdapter | None = None
 
 
@@ -156,13 +160,6 @@ def _get_store() -> SupabaseSessionStore:
     if _store is None:
         _store = SupabaseSessionStore()
     return _store
-
-
-def _get_sidecar() -> RagSidecarClient:
-    global _sidecar
-    if _sidecar is None:
-        _sidecar = RagSidecarClient()
-    return _sidecar
 
 
 def _get_storage() -> SupabaseStorageAdapter:
@@ -265,13 +262,43 @@ async def create_resource_and_ingest(file: UploadFile, user_id: str) -> tuple[Ra
         stage="queued",
     )
     await _get_store().create_rag_ingestion_job(job.to_dict())
+    await _dispatch_ingestion_job(job)
 
     return resource, job
 
 
+async def _dispatch_ingestion_job(job: RagIngestionJob) -> None:
+    """Send ingestion event via Inngest SDK. Marks job failed if send raises."""
+    import inngest
+
+    from src.inngest_client import inngest_client
+
+    try:
+        await inngest_client.send(
+            inngest.Event(
+                name="rag/ingestion.requested",
+                data={
+                    "job_id": job.job_id,
+                    "resource_id": job.resource_id,
+                    "owner_id": job.owner_id,
+                    "workspace_id": job.workspace_id,
+                },
+            )
+        )
+    except Exception as exc:
+        await _get_store().update_rag_ingestion_job(
+            job.job_id,
+            {
+                "status": "failed",
+                "stage": "dispatch_failed",
+                "error_details": str(exc),
+            },
+        )
+        raise
+
+
 async def _run_ingestion_job(job_id: str) -> None:
     store = _get_store()
-    sidecar = _get_sidecar()
 
     job_row = await store.get_rag_ingestion_job(job_id)
     if not job_row:
@@ -320,12 +347,12 @@ async def _run_ingestion_job(job_id: str) -> None:
                 storage_uri=resource.storage_uri,
                 expires_in=settings.rag_signed_url_ttl_seconds,
             )
-            await sidecar.ingest(
+            await ingest_resource_from_locator(
+                store=store,
                 resource_id=resource.resource_id,
                 file_locator=signed_file_url,
-                owner_scope=resource.owner_id,
+                owner_id=resource.owner_id,
                 workspace_id=resource.workspace_id,
-                job_id=job.job_id,
             )
             await store.update_rag_resource(
                 resource.resource_id,
@@ -393,6 +420,15 @@ async def process_queued_ingestion_jobs(limit: int = 5) -> int:
     return processed
 
 
+async def run_ingestion_job_now(job_id: str) -> bool:
+    """Claim the job atomically and run it. Returns False if already claimed."""
+    claimed = await _get_store().claim_rag_ingestion_job(job_id)
+    if not claimed:
+        return False
+    await _run_ingestion_job(job_id)
+    return True
+
+
 async def get_resource_status(resource_id: str, user_id: str) -> dict:
     workspace_id = _workspace_id_for_user(user_id)
     resource_row = await _get_store().get_rag_resource(
@@ -421,7 +457,7 @@ async def delete_resource(resource_id: str, user_id: str) -> bool:
         return False
 
     try:
-        await _get_sidecar().delete_resource(resource.resource_id)
+        await delete_resource_artifacts(store=_get_store(), resource_id=resource.resource_id)
     except Exception:
         # Sidecar cleanup is best-effort; resource deletion still proceeds.
         pass
@@ -680,10 +716,10 @@ async def retrieve_context_for_query(
     resource_ids: list[str],
     question: str,
 ) -> RagQueryResult:
-    return await _get_sidecar().query(
-        agent_id=agent_id,
+    return await query_resource_context(
+        store=_get_store(),
         resource_ids=resource_ids,
         query=question,
-        owner_scope=user_id,
+        owner_id=user_id,
         workspace_id=_workspace_id_for_user(user_id),
     )

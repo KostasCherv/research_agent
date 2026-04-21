@@ -130,43 +130,17 @@ def serve(
 
 
 @app.command()
-def rag_sidecar(
-    host: str = typer.Option("0.0.0.0", help="Bind host."),
-    port: int = typer.Option(8090, help="Bind port."),
-    reload: bool = typer.Option(False, "--reload", help="Enable auto-reload (dev mode)."),
+def rag_process_job(
+    job_id: str = typer.Argument(..., help="RAG ingestion job ID to process once."),
 ):
-    """Start the internal RAG sidecar service."""
-    import uvicorn
+    """Process a single queued RAG ingestion job immediately (idempotent)."""
+    from src.rag import run_ingestion_job_now
 
-    console.print(Panel(f"[bold cyan]RAG Sidecar[/bold cyan]\nhttp://{host}:{port}"))
-    uvicorn.run(
-        "src.sidecar.app:app",
-        host=host,
-        port=port,
-        reload=reload,
-    )
-
-
-@app.command()
-def rag_worker(
-    poll_seconds: float = typer.Option(None, help="Polling interval in seconds."),
-):
-    """Run the RAG ingestion worker loop."""
-    from src.rag import process_queued_ingestion_jobs
-
-    from src.config import settings
-
-    interval = settings.rag_worker_poll_seconds if poll_seconds is None else poll_seconds
-
-    async def _run_worker() -> None:
-        console.print(Panel("[bold cyan]RAG Ingestion Worker[/bold cyan]"))
-        while True:
-            processed = await process_queued_ingestion_jobs(limit=10)
-            if processed > 0:
-                console.print(f"[green]Processed {processed} RAG ingestion job(s)[/green]")
-            await asyncio.sleep(max(interval, 0.2))
-
-    asyncio.run(_run_worker())
+    ran = asyncio.run(run_ingestion_job_now(job_id))
+    if ran:
+        console.print(f"[green]Processed RAG ingestion job {job_id}[/green]")
+    else:
+        console.print(f"[yellow]Job {job_id} already claimed or terminal — skipped.[/yellow]")
 
 
 if __name__ == "__main__":

@@ -1,38 +1,22 @@
-"""Internal Rag Anything-compatible sidecar service.
-
-This service owns retrieval persistence (index/graph artifacts) and is deployed
-as a separate process from the main API.
-"""
+"""Shared RAG indexing/query logic used by API, sidecar, and background jobs."""
 
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 from io import BytesIO
 from pathlib import Path
-from typing import Any
 from urllib.parse import urlparse
 
 import httpx
-from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
 
 from src.db.supabase_store import SupabaseSessionStore
 
 
-app = FastAPI(
-    title="Research Agent RAG Sidecar",
-    description="Internal sidecar that manages RAG ingestion/query persistence.",
-    version="0.1.0",
-)
-
-_store: SupabaseSessionStore | None = None
-
-
-def _get_store() -> SupabaseSessionStore:
-    global _store
-    if _store is None:
-        _store = SupabaseSessionStore()
-    return _store
+@dataclass
+class RagQueryResult:
+    context: str
+    chunks: list[dict]
 
 
 def _tokenize(text: str) -> list[str]:
@@ -56,7 +40,7 @@ def _chunk_text(text: str, chunk_size: int = 1200, overlap: int = 150) -> list[s
     return chunks
 
 
-async def _read_locator_bytes(file_locator: str) -> tuple[bytes, str]:
+async def read_locator_bytes(file_locator: str) -> tuple[bytes, str]:
     parsed = urlparse(file_locator)
     if parsed.scheme in {"http", "https"}:
         async with httpx.AsyncClient(timeout=30.0) as client:
@@ -70,7 +54,7 @@ async def _read_locator_bytes(file_locator: str) -> tuple[bytes, str]:
     return path.read_bytes(), path.suffix.lower()
 
 
-def _extract_text_from_bytes(content: bytes, suffix: str) -> str:
+def extract_text_from_bytes(content: bytes, suffix: str) -> str:
     if suffix in {".txt", ".md"}:
         return content.decode("utf-8", errors="ignore")
 
@@ -90,64 +74,45 @@ def _extract_text_from_bytes(content: bytes, suffix: str) -> str:
         doc = Document(BytesIO(content))
         return "\n".join(paragraph.text for paragraph in doc.paragraphs)
 
-    raise RuntimeError(f"Unsupported file type in sidecar: {suffix}")
+    raise RuntimeError(f"Unsupported file type for ingestion: {suffix}")
 
 
-class IngestRequest(BaseModel):
-    resource_id: str
-    file_locator: str
-    owner_scope: str
-    workspace_id: str
-    job_id: str
+async def ingest_resource_from_locator(
+    *,
+    store: SupabaseSessionStore,
+    resource_id: str,
+    file_locator: str,
+    owner_id: str,
+    workspace_id: str,
+) -> int:
+    content, suffix = await read_locator_bytes(file_locator)
+    text = extract_text_from_bytes(content, suffix)
+    chunks = _chunk_text(text)
+    await store.upsert_rag_sidecar_artifact(
+        resource_id=resource_id,
+        owner_id=owner_id,
+        workspace_id=workspace_id,
+        source_locator=file_locator,
+        chunks=chunks,
+    )
+    return len(chunks)
 
 
-class QueryRequest(BaseModel):
-    agent_id: str
-    resource_ids: list[str]
-    query: str
-    owner_scope: str
-    workspace_id: str
+async def query_resource_context(
+    *,
+    store: SupabaseSessionStore,
+    resource_ids: list[str],
+    owner_id: str,
+    workspace_id: str,
+    query: str,
+) -> RagQueryResult:
+    query_tokens = set(_tokenize(query))
+    scored: list[tuple[float, dict]] = []
 
-@app.post("/ingest")
-async def ingest(body: IngestRequest):
-    try:
-        content, suffix = await _read_locator_bytes(body.file_locator)
-        text = _extract_text_from_bytes(content, suffix)
-        chunks = _chunk_text(text)
-        await _get_store().upsert_rag_sidecar_artifact(
-            resource_id=body.resource_id,
-            owner_id=body.owner_scope,
-            workspace_id=body.workspace_id,
-            source_locator=body.file_locator,
-            chunks=chunks,
-        )
-        return {
-            "job_id": body.job_id,
-            "resource_id": body.resource_id,
-            "status": "succeeded",
-            "chunk_count": len(chunks),
-        }
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
-
-
-@app.get("/ingest/{job_id}")
-async def ingest_status(job_id: str):
-    payload = await _get_store().get_rag_ingestion_job(job_id)
-    if not payload:
-        raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found.")
-    return payload
-
-
-@app.post("/query")
-async def query(body: QueryRequest):
-    query_tokens = set(_tokenize(body.query))
-    scored: list[tuple[float, dict[str, Any]]] = []
-
-    payloads = await _get_store().list_rag_sidecar_artifacts(
-        resource_ids=body.resource_ids,
-        owner_id=body.owner_scope,
-        workspace_id=body.workspace_id,
+    payloads = await store.list_rag_sidecar_artifacts(
+        resource_ids=resource_ids,
+        owner_id=owner_id,
+        workspace_id=workspace_id,
     )
 
     for resource_payload in payloads:
@@ -177,10 +142,8 @@ async def query(body: QueryRequest):
         f"[resource:{chunk['resource_id']} chunk:{chunk['chunk_id']}]\n{chunk['text']}"
         for chunk in top
     )
-    return {"context": context, "chunks": top}
+    return RagQueryResult(context=context, chunks=top)
 
 
-@app.delete("/resource/{resource_id}")
-async def delete_resource(resource_id: str):
-    await _get_store().delete_rag_sidecar_artifact(resource_id=resource_id)
-    return {"resource_id": resource_id, "deleted": True}
+async def delete_resource_artifacts(*, store: SupabaseSessionStore, resource_id: str) -> bool:
+    return await store.delete_rag_sidecar_artifact(resource_id=resource_id)

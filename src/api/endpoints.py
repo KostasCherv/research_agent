@@ -6,6 +6,7 @@ import re
 import uuid
 from typing import AsyncGenerator
 
+import inngest.fast_api as _inngest_fast_api
 from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
@@ -48,6 +49,7 @@ from src.rag import (
     retrieve_context_for_query,
     update_agent as update_rag_agent_record,
 )
+from src.inngest_client import handle_rag_ingestion, inngest_client
 from src.storage import ensure_rag_storage_ready
 
 logger = logging.getLogger(__name__)
@@ -65,6 +67,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+_inngest_fast_api.serve(app, inngest_client, [handle_rag_ingestion])
 
 
 @app.on_event("startup")
