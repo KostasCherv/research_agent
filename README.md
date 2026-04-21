@@ -148,6 +148,19 @@ cd ui
 npm run dev
 ```
 
+Run RAG sidecar + worker (three terminals):
+
+```bash
+# Terminal 1: main API
+python -m src.main serve --reload
+
+# Terminal 2: RAG sidecar service
+python -m src.main rag-sidecar --reload
+
+# Terminal 3: RAG ingestion worker
+python -m src.main rag-worker
+```
+
 ```mermaid
 flowchart LR
     browser["Browser UI (React/Vite)"] -->|"POST /sessions (create)"| api["FastAPI API"]

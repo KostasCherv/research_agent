@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import os
 import uuid
 from dataclasses import dataclass, field
@@ -145,7 +144,6 @@ class RagValidationError(Exception):
 
 _store: SupabaseSessionStore | None = None
 _sidecar: RagSidecarClient | None = None
-_ingestion_tasks: dict[str, asyncio.Task] = {}
 
 
 def _workspace_id_for_user(user_id: str) -> str:
@@ -264,10 +262,6 @@ async def create_resource_and_ingest(file: UploadFile, user_id: str) -> tuple[Ra
     )
     await _get_store().create_rag_ingestion_job(job.to_dict())
 
-    task = asyncio.create_task(_run_ingestion_job(job.job_id))
-    _ingestion_tasks[job.job_id] = task
-    task.add_done_callback(lambda _done, jid=job.job_id: _ingestion_tasks.pop(jid, None))
-
     return resource, job
 
 
@@ -353,7 +347,6 @@ async def _run_ingestion_job(job_id: str) -> None:
                         "error_details": str(exc),
                     },
                 )
-                await asyncio.sleep(min(2 ** attempt, 8))
                 continue
 
             await store.update_rag_resource(
@@ -372,6 +365,24 @@ async def _run_ingestion_job(job_id: str) -> None:
                     "error_details": str(exc),
                 },
             )
+            return
+
+
+async def process_queued_ingestion_jobs(limit: int = 5) -> int:
+    """Process queued ingestion jobs in FIFO order.
+
+    Returns the number of jobs processed.
+    """
+    store = _get_store()
+    jobs = await store.list_rag_ingestion_jobs_for_processing(limit=limit)
+    processed = 0
+    for row in jobs:
+        job_id = row.get("job_id")
+        if not job_id:
+            continue
+        await _run_ingestion_job(job_id)
+        processed += 1
+    return processed
 
 
 async def get_resource_status(resource_id: str, user_id: str) -> dict:

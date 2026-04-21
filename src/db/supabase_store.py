@@ -436,6 +436,23 @@ class SupabaseSessionStore:
             return None
         return self._map_rag_ingestion_row(rows[0])
 
+    async def list_rag_ingestion_jobs_for_processing(self, *, limit: int = 5) -> list[dict[str, Any]]:
+        response = await self._request(
+            "GET",
+            "rag_ingestion_jobs",
+            params={
+                "select": (
+                    "id,resource_id,owner_id,workspace_id,status,stage,retries,max_retries,"
+                    "error_details,created_at,updated_at"
+                ),
+                "status": "eq.queued",
+                "order": "created_at.asc",
+                "limit": str(limit),
+            },
+        )
+        rows = response.json()
+        return [self._map_rag_ingestion_row(row) for row in rows]
+
     async def update_rag_ingestion_job(self, job_id: str, patch: dict[str, Any]) -> bool:
         update_body = dict(patch)
         update_body["updated_at"] = datetime.now(UTC).isoformat()

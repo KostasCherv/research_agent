@@ -101,6 +101,14 @@ class Settings(BaseSettings):
         default=25,
         description="Maximum number of linked resources allowed per RAG agent.",
     )
+    rag_worker_poll_seconds: float = Field(
+        default=2.0,
+        description="Polling interval in seconds for the RAG ingestion worker.",
+    )
+    rag_sidecar_persist_directory: str = Field(
+        default="./data/rag_sidecar",
+        description="Persistence directory owned by the RAG sidecar service.",
+    )
 
 
 settings = Settings()

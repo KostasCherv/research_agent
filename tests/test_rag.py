@@ -3,7 +3,12 @@ from unittest.mock import AsyncMock, patch
 
 from starlette.datastructures import UploadFile
 
-from src.rag import RagValidationError, _run_ingestion_job, create_resource_and_ingest
+from src.rag import (
+    RagValidationError,
+    _run_ingestion_job,
+    create_resource_and_ingest,
+    process_queued_ingestion_jobs,
+)
 
 
 async def test_create_resource_rejects_unsupported_extension():
@@ -96,7 +101,6 @@ async def test_run_ingestion_job_marks_failed_after_retries():
     with (
         patch("src.rag._get_store", return_value=mock_store),
         patch("src.rag._get_sidecar", return_value=mock_sidecar),
-        patch("src.rag.asyncio.sleep", new=AsyncMock(return_value=None)),
     ):
         await _run_ingestion_job("job-1")
 
@@ -104,3 +108,20 @@ async def test_run_ingestion_job_marks_failed_after_retries():
         call.args[1].get("state") == "failed"
         for call in mock_store.update_rag_resource.await_args_list
     )
+
+
+async def test_process_queued_ingestion_jobs_processes_all_selected_jobs():
+    mock_store = AsyncMock()
+    mock_store.list_rag_ingestion_jobs_for_processing.return_value = [
+        {"job_id": "job-1"},
+        {"job_id": "job-2"},
+    ]
+
+    with (
+        patch("src.rag._get_store", return_value=mock_store),
+        patch("src.rag._run_ingestion_job", new=AsyncMock(return_value=None)) as mock_run,
+    ):
+        processed = await process_queued_ingestion_jobs(limit=10)
+
+    assert processed == 2
+    assert mock_run.await_count == 2
