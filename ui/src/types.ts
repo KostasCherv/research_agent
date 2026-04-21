@@ -64,3 +64,42 @@ export type FollowupStreamEvent =
   | { type: 'suggestions'; suggestions: string[] }
   | { type: 'done' }
   | { type: 'error'; error: string }
+
+export type RagResourceState = 'uploaded' | 'processing' | 'ready' | 'failed'
+
+export type RagResource = {
+  resource_id: string
+  owner_id: string
+  workspace_id: string
+  filename: string
+  mime_type: string
+  byte_size: number
+  storage_uri: string
+  state: RagResourceState
+  error_details?: string | null
+  created_at: string
+  updated_at: string
+}
+
+export type RagAgent = {
+  agent_id: string
+  owner_id: string
+  workspace_id: string
+  name: string
+  description: string
+  system_instructions: string
+  linked_resource_ids: string[]
+  created_at: string
+  updated_at: string
+}
+
+export type RagChatMessage = {
+  message_id: string
+  session_id: string
+  agent_id: string
+  owner_id: string
+  role: 'user' | 'assistant'
+  content: string
+  citations: Citation[]
+  created_at: string
+}

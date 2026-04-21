@@ -3,9 +3,10 @@
 import json
 import logging
 import re
+import uuid
 from typing import AsyncGenerator
 
-from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
@@ -30,6 +31,23 @@ from src.sessions import (
 )
 from src.tools.vector_store import VectorStoreManager
 from src.llm.factory import get_llm
+from src.rag import (
+    RagChatMessage,
+    RagValidationError,
+    append_chat_message,
+    create_agent as create_rag_agent_record,
+    create_or_get_chat_session,
+    create_resource_and_ingest,
+    delete_resource as delete_rag_resource_record,
+    get_agent_for_chat,
+    get_resource_status,
+    link_resources as link_rag_resources,
+    list_agents as list_rag_agents_records,
+    list_chat_messages as list_rag_chat_messages,
+    list_resources as list_rag_resources_records,
+    retrieve_context_for_query,
+    update_agent as update_rag_agent_record,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -97,6 +115,29 @@ class HealthResponse(BaseModel):
     version: str
 
 
+class RagAgentCreateRequest(BaseModel):
+    name: str
+    description: str = ""
+    system_instructions: str = ""
+    linked_resource_ids: list[str] = []
+
+
+class RagAgentUpdateRequest(BaseModel):
+    name: str | None = None
+    description: str | None = None
+    system_instructions: str | None = None
+    linked_resource_ids: list[str] | None = None
+
+
+class RagAgentLinkRequest(BaseModel):
+    resource_ids: list[str]
+
+
+class RagChatRequest(BaseModel):
+    message: str
+    session_id: str | None = None
+
+
 # ---------------------------------------------------------------------------
 # Exception handlers
 # ---------------------------------------------------------------------------
@@ -104,6 +145,21 @@ class HealthResponse(BaseModel):
 @app.exception_handler(ResearchAgentError)
 async def research_agent_error_handler(request: Request, exc: ResearchAgentError):
     raise HTTPException(status_code=500, detail=str(exc))
+
+
+def _raise_rag_validation_error(exc: RagValidationError) -> None:
+    status_by_code = {
+        "unsupported_type": 400,
+        "size_exceeded": 400,
+        "workspace_limit_exceeded": 400,
+        "agent_resource_limit_exceeded": 400,
+        "processing_failed": 409,
+        "unauthorized_linkage": 403,
+    }
+    raise HTTPException(
+        status_code=status_by_code.get(exc.code, 400),
+        detail={"code": exc.code, "message": str(exc)},
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -513,3 +569,216 @@ async def session_followup(
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+# ---------------------------------------------------------------------------
+# RAG Agent endpoints
+# ---------------------------------------------------------------------------
+
+
+@app.post("/api/rag/resources/upload", tags=["RAG"])
+async def rag_upload_resource(
+    file: UploadFile = File(...),
+    current_user: AuthenticatedUser = Depends(get_authenticated_user),
+):
+    try:
+        resource, job = await create_resource_and_ingest(file, current_user.user_id)
+    except RagValidationError as exc:
+        _raise_rag_validation_error(exc)
+    return {
+        "resource": resource.to_dict(),
+        "job": job.to_dict(),
+    }
+
+
+@app.get("/api/rag/resources", tags=["RAG"])
+async def rag_list_resources(
+    current_user: AuthenticatedUser = Depends(get_authenticated_user),
+):
+    resources = await list_rag_resources_records(current_user.user_id)
+    return {"resources": [r.to_dict() for r in resources]}
+
+
+@app.delete("/api/rag/resources/{resource_id}", tags=["RAG"])
+async def rag_delete_resource(
+    resource_id: str,
+    current_user: AuthenticatedUser = Depends(get_authenticated_user),
+):
+    deleted = await delete_rag_resource_record(resource_id, current_user.user_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail=f"Resource '{resource_id}' not found.")
+    return {"resource_id": resource_id, "deleted": True}
+
+
+@app.get("/api/rag/resources/{resource_id}/status", tags=["RAG"])
+async def rag_resource_status(
+    resource_id: str,
+    current_user: AuthenticatedUser = Depends(get_authenticated_user),
+):
+    status_payload = await get_resource_status(resource_id, current_user.user_id)
+    if not status_payload:
+        raise HTTPException(status_code=404, detail=f"Resource '{resource_id}' not found.")
+    return status_payload
+
+
+@app.post("/api/rag/agents", tags=["RAG"])
+async def rag_create_agent(
+    body: RagAgentCreateRequest,
+    current_user: AuthenticatedUser = Depends(get_authenticated_user),
+):
+    try:
+        agent = await create_rag_agent_record(
+            user_id=current_user.user_id,
+            name=body.name.strip(),
+            description=body.description.strip(),
+            system_instructions=body.system_instructions.strip(),
+            linked_resource_ids=body.linked_resource_ids,
+        )
+    except RagValidationError as exc:
+        _raise_rag_validation_error(exc)
+    return {"agent": agent.to_dict()}
+
+
+@app.get("/api/rag/agents", tags=["RAG"])
+async def rag_list_agents(
+    current_user: AuthenticatedUser = Depends(get_authenticated_user),
+):
+    agents = await list_rag_agents_records(current_user.user_id)
+    return {"agents": [a.to_dict() for a in agents]}
+
+
+@app.patch("/api/rag/agents/{agent_id}", tags=["RAG"])
+async def rag_update_agent(
+    agent_id: str,
+    body: RagAgentUpdateRequest,
+    current_user: AuthenticatedUser = Depends(get_authenticated_user),
+):
+    try:
+        updated = await update_rag_agent_record(
+            agent_id=agent_id,
+            user_id=current_user.user_id,
+            name=body.name.strip() if body.name is not None else None,
+            description=body.description.strip() if body.description is not None else None,
+            system_instructions=(
+                body.system_instructions.strip()
+                if body.system_instructions is not None
+                else None
+            ),
+            linked_resource_ids=body.linked_resource_ids,
+        )
+    except RagValidationError as exc:
+        _raise_rag_validation_error(exc)
+    if updated is None:
+        raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found.")
+    return {"agent": updated.to_dict()}
+
+
+@app.post("/api/rag/agents/{agent_id}/resources:link", tags=["RAG"])
+async def rag_link_resources(
+    agent_id: str,
+    body: RagAgentLinkRequest,
+    current_user: AuthenticatedUser = Depends(get_authenticated_user),
+):
+    try:
+        agent = await link_rag_resources(
+            agent_id=agent_id,
+            user_id=current_user.user_id,
+            resource_ids=body.resource_ids,
+        )
+    except RagValidationError as exc:
+        _raise_rag_validation_error(exc)
+    if agent is None:
+        raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found.")
+    return {"agent": agent.to_dict()}
+
+
+@app.post("/api/rag/agents/{agent_id}/chat", tags=["RAG"])
+async def rag_chat_with_agent(
+    agent_id: str,
+    body: RagChatRequest,
+    current_user: AuthenticatedUser = Depends(get_authenticated_user),
+):
+    normalized_message = body.message.strip()
+    if not normalized_message:
+        raise HTTPException(status_code=400, detail="Message cannot be empty.")
+
+    agent_bundle = await get_agent_for_chat(agent_id, current_user.user_id)
+    if agent_bundle is None:
+        raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found.")
+    agent, resource_ids = agent_bundle
+    if not resource_ids:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "processing_failed", "message": "Agent has no linked ready resources."},
+        )
+
+    rag_context = await retrieve_context_for_query(
+        agent_id=agent_id,
+        user_id=current_user.user_id,
+        resource_ids=resource_ids,
+        question=normalized_message,
+    )
+
+    chat_session_id = await create_or_get_chat_session(
+        user_id=current_user.user_id,
+        agent_id=agent_id,
+        session_id=body.session_id,
+    )
+    history = await list_rag_chat_messages(chat_session_id, current_user.user_id)
+
+    history_block = "\n".join(
+        f"{m.role.upper()}: {m.content}"
+        for m in history[-10:]
+    )
+    prompt = (
+        "You are a custom RAG assistant.\n\n"
+        f"System instructions:\n{agent.system_instructions or 'None'}\n\n"
+        f"Conversation history:\n{history_block or 'None'}\n\n"
+        f"Retrieved context:\n{rag_context.context or 'No context returned.'}\n\n"
+        f"User question:\n{normalized_message}\n\n"
+        "Answer clearly and stay grounded in the retrieved context."
+    )
+    llm = get_llm(temperature=0.2)
+    result = await llm.ainvoke(prompt)
+    content = result.content
+    if not isinstance(content, str):
+        content = "".join(
+            part if isinstance(part, str) else part.get("text", "")
+            for part in content
+        )
+    answer = content.strip()
+
+    user_msg = RagChatMessage(
+        message_id=str(uuid.uuid4()),
+        session_id=chat_session_id,
+        agent_id=agent_id,
+        owner_id=current_user.user_id,
+        role="user",
+        content=normalized_message,
+    )
+    citations = [
+        {
+            "source_title": chunk.get("source_title") or "resource",
+            "source_url": chunk.get("source_url") or "",
+        }
+        for chunk in rag_context.chunks
+    ]
+    assistant_msg = RagChatMessage(
+        message_id=str(uuid.uuid4()),
+        session_id=chat_session_id,
+        agent_id=agent_id,
+        owner_id=current_user.user_id,
+        role="assistant",
+        content=answer,
+        citations=citations,
+    )
+    await append_chat_message(user_msg)
+    await append_chat_message(assistant_msg)
+
+    updated_history = await list_rag_chat_messages(chat_session_id, current_user.user_id)
+    return {
+        "session_id": chat_session_id,
+        "agent_id": agent_id,
+        "reply": assistant_msg.to_dict(),
+        "messages": [m.to_dict() for m in updated_history],
+    }

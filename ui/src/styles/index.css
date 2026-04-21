@@ -263,6 +263,157 @@ p {
   color: #ffb2b2;
 }
 
+.mode-switch-row {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.mode-button-active {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px rgba(139, 156, 247, 0.35) inset;
+}
+
+.rag-mode-panel {
+  display: grid;
+  gap: 1rem;
+}
+
+.rag-mode-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.rag-tabs {
+  display: flex;
+  gap: 0.4rem;
+}
+
+.rag-tab {
+  border: 1px solid rgba(184, 197, 255, 0.24);
+  background: rgba(9, 13, 26, 0.45);
+  color: var(--text-primary);
+  border-radius: 9px;
+  padding: 0.35rem 0.6rem;
+  cursor: pointer;
+}
+
+.rag-tab.is-active {
+  border-color: var(--accent);
+}
+
+.rag-tab-panel {
+  display: grid;
+  gap: 0.9rem;
+}
+
+.rag-actions-row {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+}
+
+.rag-resource-list,
+.rag-agent-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.5rem;
+}
+
+.rag-resource-item,
+.rag-agent-item {
+  border: 1px solid rgba(184, 197, 255, 0.2);
+  border-radius: 10px;
+  padding: 0.6rem 0.7rem;
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 0.6rem;
+}
+
+.rag-resource-item p,
+.rag-agent-item p {
+  color: var(--text-muted);
+  font-size: 0.84rem;
+}
+
+.rag-state {
+  text-transform: capitalize;
+}
+
+.rag-state-ready {
+  color: var(--success);
+}
+
+.rag-state-failed {
+  color: var(--danger);
+}
+
+.rag-state-processing,
+.rag-state-uploaded {
+  color: #facc15;
+}
+
+.rag-error-details {
+  color: var(--danger);
+}
+
+.rag-agent-form {
+  display: grid;
+  gap: 0.6rem;
+}
+
+.rag-checkbox-list {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.rag-checkbox-item {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  color: var(--text-primary);
+  font-size: 0.86rem;
+}
+
+.rag-chat-panel {
+  min-height: 340px;
+}
+
+.rag-chat-messages {
+  border: 1px solid rgba(184, 197, 255, 0.2);
+  border-radius: 10px;
+  padding: 0.7rem;
+  min-height: 180px;
+  max-height: 360px;
+  overflow-y: auto;
+  display: grid;
+  gap: 0.45rem;
+}
+
+.rag-chat-message {
+  border-radius: 8px;
+  padding: 0.45rem 0.55rem;
+  font-size: 0.9rem;
+}
+
+.rag-chat-user {
+  background: rgba(139, 156, 247, 0.2);
+}
+
+.rag-chat-assistant {
+  background: rgba(199, 210, 254, 0.08);
+}
+
+.rag-chat-input-row {
+  display: grid;
+  gap: 0.55rem;
+}
+
 .card-spacing {
   padding: 1.25rem 1.5rem;
 }
