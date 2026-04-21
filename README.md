@@ -23,6 +23,35 @@ flowchart LR
 
 Each node is a pure function that receives and returns a `ResearchState` TypedDict. Conditional edges handle error cases and empty result sets without crashing the pipeline.
 
+RAG ingestion now uses an outbox + dispatcher pattern for reliability:
+
+```mermaid
+flowchart LR
+    user["User uploads file"] --> api["FastAPI /api/rag/resources/upload"]
+    api --> tx["Atomic DB RPC\ncreate_resource_job_and_outbox"]
+    tx --> resource["rag_resources"]
+    tx --> job["rag_ingestion_jobs (queued)"]
+    tx --> outbox["event_outbox (pending)"]
+
+    dispatcher["rag-dispatch-outbox"] --> claim["Claim outbox row\npending -> dispatching"]
+    claim --> inngestSend["Send event to Inngest"]
+    inngestSend --> inngestFn["Inngest function\nrag/ingestion.requested"]
+    inngestFn --> jobClaim["Claim job\nqueued -> running"]
+    jobClaim --> ingest["RAG ingest from Supabase signed URL"]
+    ingest --> artifacts["rag_sidecar_artifacts"]
+    ingest --> ready["rag_ingestion_jobs -> succeeded\nrag_resources -> ready"]
+
+    claim -->|send error| retry["Backoff + retry / fail"]
+    jobClaim -->|already claimed/terminal| noop["No-op (idempotent)"]
+```
+
+Reliability patterns used:
+- Transactional write: resource + ingestion job + outbox row created in one DB transaction.
+- Durable outbox: events are persisted before external dispatch.
+- Concurrent-safe dispatch: outbox rows are atomically claimed before send.
+- Idempotent execution: ingestion job is atomically claimed (`queued` only), duplicate events no-op.
+- Recovery: stuck `dispatching` outbox rows are reset and retried.
+
 ## Tech Stack
 
 | Area | Technologies / Tools |
@@ -131,57 +160,28 @@ Session UX:
 - Double-click a session title to rename it.
 - Right-click a session entry to open the context menu (rename/delete).
 
-Run backend + frontend with one command:
+Run everything together (local):
 
 ```bash
-bash scripts/dev.sh
-```
-
-Run backend + frontend together (two terminals):
-
-```bash
-# Terminal 1 (repo root)
+# Terminal 1: API server
 python -m src.main serve --reload
 
-# Terminal 2
+# Terminal 2: frontend
 cd ui
 npm run dev
-```
 
-Run the API and Inngest dev server:
-
-```bash
-# Terminal 1: main API
-python -m src.main serve --reload
-
-# Terminal 2: Inngest dev server (routes events to the local app)
+# Terminal 3: Inngest dev server (routes events to local API)
 npx --ignore-scripts=false inngest-cli@latest dev -u http://127.0.0.1:8000/api/inngest --no-discovery
+
+# Terminal 4: outbox dispatcher loop (dev)
+while true; do python -m src.main rag-dispatch-outbox --limit 100; sleep 2; done
 ```
 
-### Outbox dispatcher
-
-Uploads write to an `event_outbox` table before dispatching to Inngest, so no events are lost if the API restarts or the Inngest endpoint is temporarily unreachable.
-
-Dispatch pending events on-demand:
+Single-run dispatcher command:
 
 ```bash
-python -m src.main rag-dispatch-outbox          # dispatch up to 50 pending events
+python -m src.main rag-dispatch-outbox
 python -m src.main rag-dispatch-outbox --limit 100
-```
-
-For production, run the dispatcher on a schedule (cron, Inngest cron function, or a simple loop). The dispatcher is safe to run concurrently — each event is claimed atomically before being sent, so duplicate dispatches are prevented. Events stuck in `dispatching` state for more than 5 minutes are automatically reset to `pending` and retried on the next run.
-
-```mermaid
-flowchart LR
-    browser["Browser UI (React/Vite)"] -->|"POST /sessions (create)"| api["FastAPI API"]
-    browser -->|"POST /sessions/{id}/research (SSE)"| api
-    api --> pipelineFlow["LangGraph pipeline"]
-    pipelineFlow --> reportOut["Markdown report"]
-    pipelineFlow --> memorySearch["Chroma memory search (memory_context)"]
-    reportOut -->|"if enabled"| chromaPersist["Chroma source chunks persist"]
-    reportOut --> browser
-    browser -->|"POST /sessions/{id}/followup (SSE)"| api
-    api -->|"search run sources"| chromaPersist
 ```
 
 ## API
@@ -303,37 +303,4 @@ ruff check src
 
 # Type check
 mypy src
-```
-
-## Project Structure
-
-```
-src/
-├── config.py           # Pydantic-settings config (feature flags, env vars)
-├── errors.py           # Custom exceptions
-├── main.py             # Typer CLI
-├── auth.py             # Supabase JWT validation dependency (FastAPI)
-├── sessions.py         # Session domain models + persistence helpers
-├── db/supabase_store.py # Supabase PostgREST persistence implementation
-├── llm/factory.py      # LLM factory (OpenAI / Ollama)
-├── graph/
-│   ├── state.py        # ResearchState TypedDict
-│   ├── nodes.py        # All pipeline nodes
-│   ├── edges.py        # Conditional routing
-│   └── graph.py        # LangGraph compile
-├── tools/
-│   ├── search.py       # Tavily + retry
-│   ├── fetcher.py      # Async URL fetcher
-│   └── vector_store.py # ChromaDB manager (reports + per-run source chunks)
-└── api/endpoints.py    # FastAPI + SSE (research, sessions, follow-up)
-ui/
-├── src/
-│   ├── App.tsx                       # Main UI shell — session lifecycle, state
-│   ├── types.ts                      # Shared TypeScript types
-│   ├── api/client.ts                 # SSE client (research, sessions, follow-up)
-│   ├── components/ChatForm.tsx       # Query input form
-│   ├── components/ResearchProgress.tsx
-│   ├── components/ReportViewer.tsx
-│   └── components/FollowupChat.tsx   # ChatGPT-style follow-up chat
-└── package.json                      # Vite scripts and deps
 ```
