@@ -111,10 +111,6 @@ class Settings(BaseSettings):
         default=2.0,
         description="Polling interval in seconds for the RAG ingestion worker.",
     )
-    rag_sidecar_persist_directory: str = Field(
-        default="./data/rag_sidecar",
-        description="Persistence directory owned by the RAG sidecar service.",
-    )
     rag_storage_bucket: str = Field(
         default="rag-resources",
         description="Supabase Storage bucket used for raw RAG resource files.",

@@ -1,5 +1,5 @@
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 from fastapi.testclient import TestClient
 
@@ -13,7 +13,32 @@ def test_sidecar_ingest_query_and_delete_flow(tmp_path: Path):
     source_file = tmp_path / "sample.txt"
     source_file.write_text("LangGraph enables agent workflows with graphs.", encoding="utf-8")
 
-    with patch("src.sidecar.app.settings.rag_sidecar_persist_directory", str(tmp_path / "sidecar")):
+    mock_store = AsyncMock()
+    mock_store.get_rag_ingestion_job.return_value = {
+        "job_id": "job-1",
+        "resource_id": "res-1",
+        "status": "succeeded",
+        "stage": "completed",
+        "retries": 0,
+        "max_retries": 2,
+        "owner_id": "user-1",
+        "workspace_id": "ws-1",
+        "created_at": "2026-01-01T00:00:00+00:00",
+        "updated_at": "2026-01-01T00:00:00+00:00",
+        "error_details": None,
+    }
+    mock_store.list_rag_sidecar_artifacts.return_value = [
+        {
+            "resource_id": "res-1",
+            "owner_id": "user-1",
+            "workspace_id": "ws-1",
+            "source_locator": str(source_file),
+            "chunks": ["LangGraph enables agent workflows with graphs."],
+            "updated_at": "2026-01-01T00:00:00+00:00",
+        }
+    ]
+
+    with patch("src.sidecar.app._get_store", return_value=mock_store):
         ingest = client.post(
             "/ingest",
             json={
@@ -48,3 +73,6 @@ def test_sidecar_ingest_query_and_delete_flow(tmp_path: Path):
         delete = client.delete("/resource/res-1")
         assert delete.status_code == 200
         assert delete.json()["deleted"] is True
+
+    mock_store.upsert_rag_sidecar_artifact.assert_awaited_once()
+    mock_store.delete_rag_sidecar_artifact.assert_awaited_once_with(resource_id="res-1")

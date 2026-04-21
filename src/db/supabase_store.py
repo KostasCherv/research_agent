@@ -466,6 +466,77 @@ class SupabaseSessionStore:
         rows = response.json()
         return bool(rows)
 
+    async def upsert_rag_sidecar_artifact(
+        self,
+        *,
+        resource_id: str,
+        owner_id: str,
+        workspace_id: str,
+        source_locator: str,
+        chunks: list[str],
+    ) -> None:
+        payload = {
+            "resource_id": resource_id,
+            "owner_id": owner_id,
+            "workspace_id": workspace_id,
+            "source_locator": source_locator,
+            "chunks": chunks,
+            "updated_at": datetime.now(UTC).isoformat(),
+        }
+        await self._request(
+            "POST",
+            "rag_sidecar_artifacts",
+            json_body=payload,
+            extra_headers={"Prefer": "resolution=merge-duplicates"},
+        )
+
+    async def get_rag_sidecar_artifact(self, *, resource_id: str) -> dict[str, Any] | None:
+        response = await self._request(
+            "GET",
+            "rag_sidecar_artifacts",
+            params={
+                "select": "resource_id,owner_id,workspace_id,source_locator,chunks,updated_at",
+                "resource_id": f"eq.{resource_id}",
+                "limit": "1",
+            },
+        )
+        rows = response.json()
+        if not rows:
+            return None
+        return rows[0]
+
+    async def list_rag_sidecar_artifacts(
+        self,
+        *,
+        resource_ids: list[str],
+        owner_id: str,
+        workspace_id: str,
+    ) -> list[dict[str, Any]]:
+        if not resource_ids:
+            return []
+        joined = ",".join(resource_ids)
+        response = await self._request(
+            "GET",
+            "rag_sidecar_artifacts",
+            params={
+                "select": "resource_id,owner_id,workspace_id,source_locator,chunks,updated_at",
+                "resource_id": f"in.({joined})",
+                "owner_id": f"eq.{owner_id}",
+                "workspace_id": f"eq.{workspace_id}",
+            },
+        )
+        return response.json()
+
+    async def delete_rag_sidecar_artifact(self, *, resource_id: str) -> bool:
+        response = await self._request(
+            "DELETE",
+            "rag_sidecar_artifacts",
+            params={"resource_id": f"eq.{resource_id}"},
+            extra_headers={"Prefer": "return=representation"},
+        )
+        rows = response.json()
+        return bool(rows)
+
     # ------------------------------------------------------------------
     # RAG agents + linking
     # ------------------------------------------------------------------

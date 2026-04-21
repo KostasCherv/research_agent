@@ -275,7 +275,6 @@ You get full observability from input to final report: where time is spent, wher
 | `RAG_STORAGE_BUCKET` | `rag-resources` | Supabase Storage private bucket for uploaded RAG files |
 | `RAG_SIGNED_URL_TTL_SECONDS` | `600` | Signed URL TTL used by worker when sidecar ingests files |
 | `RAG_SIDECAR_BASE_URL` | `http://localhost:8090` | Internal URL for the RAG sidecar service |
-| `RAG_SIDECAR_PERSIST_DIRECTORY` | `./data/rag_sidecar` | Local persistence directory owned by the sidecar |
 | `RAG_WORKER_POLL_SECONDS` | `2.0` | Poll interval for queued ingestion jobs |
 
 Session endpoints now require a bearer token from Supabase Auth. The recommended UI flow is Google OAuth via Supabase on the frontend, then forwarding `Authorization: Bearer <access_token>` for session endpoints.

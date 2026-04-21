@@ -6,10 +6,8 @@ as a separate process from the main API.
 
 from __future__ import annotations
 
-import json
 import re
 from io import BytesIO
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
@@ -18,7 +16,7 @@ import httpx
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
-from src.config import settings
+from src.db.supabase_store import SupabaseSessionStore
 
 
 app = FastAPI(
@@ -27,29 +25,14 @@ app = FastAPI(
     version="0.1.0",
 )
 
-
-@dataclass
-class SidecarPaths:
-    base: Path
-    jobs: Path
-    resources: Path
+_store: SupabaseSessionStore | None = None
 
 
-def _paths() -> SidecarPaths:
-    base = Path(settings.rag_sidecar_persist_directory).expanduser().resolve()
-    jobs = base / "jobs"
-    resources = base / "resources"
-    jobs.mkdir(parents=True, exist_ok=True)
-    resources.mkdir(parents=True, exist_ok=True)
-    return SidecarPaths(base=base, jobs=jobs, resources=resources)
-
-
-def _job_path(job_id: str) -> Path:
-    return _paths().jobs / f"{job_id}.json"
-
-
-def _resource_path(resource_id: str) -> Path:
-    return _paths().resources / f"{resource_id}.json"
+def _get_store() -> SupabaseSessionStore:
+    global _store
+    if _store is None:
+        _store = SupabaseSessionStore()
+    return _store
 
 
 def _tokenize(text: str) -> list[str]:
@@ -125,54 +108,18 @@ class QueryRequest(BaseModel):
     owner_scope: str
     workspace_id: str
 
-
-def _write_job(job_id: str, payload: dict[str, Any]) -> None:
-    _job_path(job_id).write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
-
-
-def _read_json(path: Path) -> dict[str, Any] | None:
-    if not path.exists():
-        return None
-    return json.loads(path.read_text(encoding="utf-8"))
-
-
 @app.post("/ingest")
 async def ingest(body: IngestRequest):
-    _write_job(
-        body.job_id,
-        {
-            "job_id": body.job_id,
-            "resource_id": body.resource_id,
-            "status": "running",
-            "stage": "ingesting",
-            "error": None,
-        },
-    )
-
     try:
         content, suffix = await _read_locator_bytes(body.file_locator)
         text = _extract_text_from_bytes(content, suffix)
         chunks = _chunk_text(text)
-        record = {
-            "resource_id": body.resource_id,
-            "owner_scope": body.owner_scope,
-            "workspace_id": body.workspace_id,
-            "file_locator": body.file_locator,
-            "chunks": chunks,
-        }
-        _resource_path(body.resource_id).write_text(
-            json.dumps(record, ensure_ascii=False),
-            encoding="utf-8",
-        )
-        _write_job(
-            body.job_id,
-            {
-                "job_id": body.job_id,
-                "resource_id": body.resource_id,
-                "status": "succeeded",
-                "stage": "completed",
-                "error": None,
-            },
+        await _get_store().upsert_rag_sidecar_artifact(
+            resource_id=body.resource_id,
+            owner_id=body.owner_scope,
+            workspace_id=body.workspace_id,
+            source_locator=body.file_locator,
+            chunks=chunks,
         )
         return {
             "job_id": body.job_id,
@@ -181,22 +128,12 @@ async def ingest(body: IngestRequest):
             "chunk_count": len(chunks),
         }
     except Exception as exc:
-        _write_job(
-            body.job_id,
-            {
-                "job_id": body.job_id,
-                "resource_id": body.resource_id,
-                "status": "failed",
-                "stage": "failed",
-                "error": str(exc),
-            },
-        )
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
 @app.get("/ingest/{job_id}")
 async def ingest_status(job_id: str):
-    payload = _read_json(_job_path(job_id))
+    payload = await _get_store().get_rag_ingestion_job(job_id)
     if not payload:
         raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found.")
     return payload
@@ -207,15 +144,13 @@ async def query(body: QueryRequest):
     query_tokens = set(_tokenize(body.query))
     scored: list[tuple[float, dict[str, Any]]] = []
 
-    for resource_id in body.resource_ids:
-        resource_payload = _read_json(_resource_path(resource_id))
-        if not resource_payload:
-            continue
-        if resource_payload.get("owner_scope") != body.owner_scope:
-            continue
-        if resource_payload.get("workspace_id") != body.workspace_id:
-            continue
+    payloads = await _get_store().list_rag_sidecar_artifacts(
+        resource_ids=body.resource_ids,
+        owner_id=body.owner_scope,
+        workspace_id=body.workspace_id,
+    )
 
+    for resource_payload in payloads:
         for idx, chunk in enumerate(resource_payload.get("chunks") or []):
             if not isinstance(chunk, str):
                 continue
@@ -227,10 +162,10 @@ async def query(body: QueryRequest):
                 (
                     score,
                     {
-                        "resource_id": resource_id,
-                        "chunk_id": f"{resource_id}:{idx}",
+                        "resource_id": resource_payload["resource_id"],
+                        "chunk_id": f"{resource_payload['resource_id']}:{idx}",
                         "text": chunk,
-                        "source_title": Path(resource_payload.get("file_locator", "")).name,
+                        "source_title": Path(resource_payload.get("source_locator", "")).name,
                         "source_url": "",
                     },
                 )
@@ -247,7 +182,5 @@ async def query(body: QueryRequest):
 
 @app.delete("/resource/{resource_id}")
 async def delete_resource(resource_id: str):
-    path = _resource_path(resource_id)
-    if path.exists():
-        path.unlink()
+    await _get_store().delete_rag_sidecar_artifact(resource_id=resource_id)
     return {"resource_id": resource_id, "deleted": True}
