@@ -1,5 +1,7 @@
 """CLI entry point using Typer + Rich."""
 
+import asyncio
+
 import typer
 from rich.console import Console
 from rich.markdown import Markdown
@@ -125,6 +127,31 @@ def serve(
         port=port,
         reload=reload,
     )
+
+
+@app.command()
+def rag_dispatch_outbox(
+    limit: int = typer.Option(50, "--limit", help="Max events to dispatch per run."),
+):
+    """Dispatch pending outbox events to Inngest (run from cron or on-demand)."""
+    from src.outbox import dispatch_outbox_events
+
+    sent = asyncio.run(dispatch_outbox_events(limit=limit))
+    console.print(f"[green]Dispatched {sent} outbox event(s)[/green]")
+
+
+@app.command()
+def rag_process_job(
+    job_id: str = typer.Argument(..., help="RAG ingestion job ID to process once."),
+):
+    """Process a single queued RAG ingestion job immediately (idempotent)."""
+    from src.rag import run_ingestion_job_now
+
+    ran = asyncio.run(run_ingestion_job_now(job_id))
+    if ran:
+        console.print(f"[green]Processed RAG ingestion job {job_id}[/green]")
+    else:
+        console.print(f"[yellow]Job {job_id} already claimed or terminal — skipped.[/yellow]")
 
 
 if __name__ == "__main__":

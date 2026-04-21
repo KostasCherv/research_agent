@@ -7,6 +7,7 @@ from fastapi.testclient import TestClient
 
 from src.api.endpoints import app
 from src.auth import AuthenticatedUser, get_authenticated_user
+from src.rag import RagValidationError
 from src.sessions import Session, SessionRun
 
 client = TestClient(app)
@@ -211,9 +212,23 @@ def test_startup_validation_does_not_fail_without_supabase_configuration():
         patch("src.api.endpoints.settings.supabase_url", ""),
         patch("src.api.endpoints.settings.supabase_service_role_key", ""),
         patch("src.api.endpoints.ensure_store_initialized") as mock_init,
+        patch("src.api.endpoints.ensure_rag_storage_ready", new=AsyncMock()) as mock_storage_ready,
     ):
         asyncio.run(app.router.on_startup[0]())
         mock_init.assert_not_called()
+        mock_storage_ready.assert_not_awaited()
+
+
+def test_startup_validation_checks_rag_storage_when_supabase_configured():
+    with (
+        patch("src.api.endpoints.settings.supabase_url", "https://example.supabase.co"),
+        patch("src.api.endpoints.settings.supabase_service_role_key", "service-role"),
+        patch("src.api.endpoints.ensure_store_initialized") as mock_init,
+        patch("src.api.endpoints.ensure_rag_storage_ready", new=AsyncMock()) as mock_storage_ready,
+    ):
+        asyncio.run(app.router.on_startup[0]())
+        mock_init.assert_called_once()
+        mock_storage_ready.assert_awaited_once()
 
 
 # ---------------------------------------------------------------------------
@@ -317,6 +332,75 @@ def test_followup_stream_includes_suggestions_event():
 async def _async_iter_impl(items):
     for item in items:
         yield item
+
+
+# ---------------------------------------------------------------------------
+# RAG endpoint tests
+# ---------------------------------------------------------------------------
+
+
+def test_rag_list_resources_returns_payload():
+    mock_resource = MagicMock()
+    mock_resource.to_dict.return_value = {"resource_id": "r-1", "state": "ready"}
+    with patch(
+        "src.api.endpoints.list_rag_resources_records",
+        new=AsyncMock(return_value=[mock_resource]),
+    ):
+        response = client.get("/api/rag/resources")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["resources"] == [{"resource_id": "r-1", "state": "ready"}]
+
+
+def test_rag_upload_maps_validation_errors():
+    with patch(
+        "src.api.endpoints.create_resource_and_ingest",
+        new=AsyncMock(side_effect=RagValidationError("unsupported_type", "Unsupported file type.")),
+    ):
+        response = client.post(
+            "/api/rag/resources/upload",
+            files={"file": ("test.exe", b"abc", "application/octet-stream")},
+        )
+    assert response.status_code == 400
+    detail = response.json()["detail"]
+    assert detail["code"] == "unsupported_type"
+
+
+def test_rag_chat_returns_agent_reply():
+    mock_agent = MagicMock()
+    mock_agent.system_instructions = "Keep it concise."
+
+    mock_context = MagicMock()
+    mock_context.context = "Relevant context."
+    mock_context.chunks = [{"source_title": "Doc", "source_url": "https://example.com"}]
+
+    mock_user_message = MagicMock()
+    mock_user_message.to_dict.return_value = {"role": "user"}
+    mock_assistant_message = MagicMock()
+    mock_assistant_message.to_dict.return_value = {"role": "assistant", "content": "Answer"}
+
+    llm_result = MagicMock()
+    llm_result.content = "Answer"
+    mock_llm = AsyncMock()
+    mock_llm.ainvoke = AsyncMock(return_value=llm_result)
+
+    with (
+        patch("src.api.endpoints.get_agent_for_chat", new=AsyncMock(return_value=(mock_agent, ["res-1"]))),
+        patch("src.api.endpoints.retrieve_context_for_query", new=AsyncMock(return_value=mock_context)),
+        patch("src.api.endpoints.create_or_get_chat_session", new=AsyncMock(return_value="chat-1")),
+        patch("src.api.endpoints.list_rag_chat_messages", new=AsyncMock(return_value=[])),
+        patch("src.api.endpoints.append_chat_message", new=AsyncMock(return_value=None)),
+        patch("src.api.endpoints.get_llm", return_value=mock_llm),
+        patch("src.api.endpoints.RagChatMessage", side_effect=[mock_user_message, mock_assistant_message]),
+    ):
+        response = client.post(
+            "/api/rag/agents/agent-1/chat",
+            json={"message": "Hello", "session_id": None},
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["session_id"] == "chat-1"
 
 
 def _async_iter(items):

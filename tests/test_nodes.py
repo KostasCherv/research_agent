@@ -140,7 +140,7 @@ def test_vector_store_node_saves_when_enabled():
         mock_cls.return_value = mock_manager
 
         from src.graph.nodes import vector_store_node
-        state = vector_store_node({
+        vector_store_node({
             "query": "LangGraph",
             "use_vector_store": True,
             "report": "# Report",

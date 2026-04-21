@@ -2,6 +2,9 @@ import type {
   Citation,
   FollowupStreamEvent,
   HealthResponse,
+  RagAgent,
+  RagChatMessage,
+  RagResource,
   ResearchRequest,
   ResearchStreamEvent,
   SessionDetail,
@@ -347,4 +350,158 @@ export async function streamResearch(
     }
   }
   options.onDone?.()
+}
+
+// ---------------------------------------------------------------------------
+// RAG Agent API
+// ---------------------------------------------------------------------------
+
+export async function uploadRagResource(
+  file: File,
+  accessToken: string | null,
+): Promise<{ resource: RagResource }> {
+  const formData = new FormData()
+  formData.append('file', file)
+  const response = await fetch(`${API_BASE}/api/rag/resources/upload`, {
+    method: 'POST',
+    headers: authHeaders(accessToken),
+    body: formData,
+  })
+  if (!response.ok) {
+    throw new Error(`Failed to upload resource: ${response.status}`)
+  }
+  return (await response.json()) as { resource: RagResource }
+}
+
+export async function listRagResources(
+  accessToken: string | null,
+): Promise<{ resources: RagResource[] }> {
+  const response = await fetch(`${API_BASE}/api/rag/resources`, {
+    headers: authHeaders(accessToken),
+  })
+  if (!response.ok) {
+    throw new Error(`Failed to load resources: ${response.status}`)
+  }
+  return (await response.json()) as { resources: RagResource[] }
+}
+
+export async function getRagResourceStatus(
+  resourceId: string,
+  accessToken: string | null,
+): Promise<{ resource: RagResource }> {
+  const response = await fetch(`${API_BASE}/api/rag/resources/${resourceId}/status`, {
+    headers: authHeaders(accessToken),
+  })
+  if (!response.ok) {
+    throw new Error(`Failed to fetch resource status: ${response.status}`)
+  }
+  return (await response.json()) as { resource: RagResource }
+}
+
+export async function deleteRagResource(
+  resourceId: string,
+  accessToken: string | null,
+): Promise<void> {
+  const response = await fetch(`${API_BASE}/api/rag/resources/${resourceId}`, {
+    method: 'DELETE',
+    headers: authHeaders(accessToken),
+  })
+  if (!response.ok) {
+    throw new Error(`Failed to delete resource: ${response.status}`)
+  }
+}
+
+type RagAgentPayload = {
+  name: string
+  description: string
+  system_instructions: string
+  linked_resource_ids: string[]
+}
+
+export async function createRagAgent(
+  payload: RagAgentPayload,
+  accessToken: string | null,
+): Promise<{ agent: RagAgent }> {
+  const response = await fetch(`${API_BASE}/api/rag/agents`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...authHeaders(accessToken),
+    },
+    body: JSON.stringify(payload),
+  })
+  if (!response.ok) {
+    throw new Error(`Failed to create agent: ${response.status}`)
+  }
+  return (await response.json()) as { agent: RagAgent }
+}
+
+export async function listRagAgents(
+  accessToken: string | null,
+): Promise<{ agents: RagAgent[] }> {
+  const response = await fetch(`${API_BASE}/api/rag/agents`, {
+    headers: authHeaders(accessToken),
+  })
+  if (!response.ok) {
+    throw new Error(`Failed to list agents: ${response.status}`)
+  }
+  return (await response.json()) as { agents: RagAgent[] }
+}
+
+export async function updateRagAgent(
+  agentId: string,
+  payload: Partial<RagAgentPayload>,
+  accessToken: string | null,
+): Promise<{ agent: RagAgent }> {
+  const response = await fetch(`${API_BASE}/api/rag/agents/${agentId}`, {
+    method: 'PATCH',
+    headers: {
+      'Content-Type': 'application/json',
+      ...authHeaders(accessToken),
+    },
+    body: JSON.stringify(payload),
+  })
+  if (!response.ok) {
+    throw new Error(`Failed to update agent: ${response.status}`)
+  }
+  return (await response.json()) as { agent: RagAgent }
+}
+
+export async function linkRagAgentResources(
+  agentId: string,
+  resourceIds: string[],
+  accessToken: string | null,
+): Promise<{ agent: RagAgent }> {
+  const response = await fetch(`${API_BASE}/api/rag/agents/${agentId}/resources:link`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...authHeaders(accessToken),
+    },
+    body: JSON.stringify({ resource_ids: resourceIds }),
+  })
+  if (!response.ok) {
+    throw new Error(`Failed to link resources: ${response.status}`)
+  }
+  return (await response.json()) as { agent: RagAgent }
+}
+
+export async function chatWithRagAgent(
+  agentId: string,
+  message: string,
+  sessionId: string | null,
+  accessToken: string | null,
+): Promise<{ session_id: string; messages: RagChatMessage[] }> {
+  const response = await fetch(`${API_BASE}/api/rag/agents/${agentId}/chat`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...authHeaders(accessToken),
+    },
+    body: JSON.stringify({ message, session_id: sessionId }),
+  })
+  if (!response.ok) {
+    throw new Error(`Failed to chat with RAG agent: ${response.status}`)
+  }
+  return (await response.json()) as { session_id: string; messages: RagChatMessage[] }
 }

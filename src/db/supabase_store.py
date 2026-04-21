@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
 import httpx
@@ -239,3 +239,670 @@ class SupabaseSessionStore:
             "created_at": turn.created_at,
         }
         await self._request("POST", "conversation_turns", json_body=payload)
+
+    # ------------------------------------------------------------------
+    # RAG resources + jobs
+    # ------------------------------------------------------------------
+
+    async def create_rag_resource(self, payload: dict[str, Any]) -> None:
+        body = {
+            "id": payload["resource_id"],
+            "owner_id": payload["owner_id"],
+            "workspace_id": payload["workspace_id"],
+            "filename": payload["filename"],
+            "mime_type": payload["mime_type"],
+            "byte_size": payload["byte_size"],
+            "storage_uri": payload["storage_uri"],
+            "state": payload["state"],
+            "error_details": payload.get("error_details"),
+            "created_at": payload["created_at"],
+            "updated_at": payload["updated_at"],
+        }
+        await self._request("POST", "rag_resources", json_body=body)
+
+    async def list_rag_resources(self, *, owner_id: str, workspace_id: str) -> list[dict[str, Any]]:
+        response = await self._request(
+            "GET",
+            "rag_resources",
+            params={
+                "select": (
+                    "id,owner_id,workspace_id,filename,mime_type,byte_size,storage_uri,state,"
+                    "error_details,created_at,updated_at"
+                ),
+                "owner_id": f"eq.{owner_id}",
+                "workspace_id": f"eq.{workspace_id}",
+                "order": "created_at.desc",
+            },
+        )
+        rows = response.json()
+        return [self._map_rag_resource_row(row) for row in rows]
+
+    async def get_rag_resource(
+        self,
+        *,
+        resource_id: str,
+        owner_id: str,
+        workspace_id: str,
+    ) -> dict[str, Any] | None:
+        response = await self._request(
+            "GET",
+            "rag_resources",
+            params={
+                "select": (
+                    "id,owner_id,workspace_id,filename,mime_type,byte_size,storage_uri,state,"
+                    "error_details,created_at,updated_at"
+                ),
+                "id": f"eq.{resource_id}",
+                "owner_id": f"eq.{owner_id}",
+                "workspace_id": f"eq.{workspace_id}",
+                "limit": "1",
+            },
+        )
+        rows = response.json()
+        if not rows:
+            return None
+        return self._map_rag_resource_row(rows[0])
+
+    async def get_rag_resources_by_ids(
+        self,
+        *,
+        resource_ids: list[str],
+        owner_id: str,
+        workspace_id: str,
+    ) -> list[dict[str, Any]]:
+        if not resource_ids:
+            return []
+        joined = ",".join(resource_ids)
+        response = await self._request(
+            "GET",
+            "rag_resources",
+            params={
+                "select": (
+                    "id,owner_id,workspace_id,filename,mime_type,byte_size,storage_uri,state,"
+                    "error_details,created_at,updated_at"
+                ),
+                "id": f"in.({joined})",
+                "owner_id": f"eq.{owner_id}",
+                "workspace_id": f"eq.{workspace_id}",
+            },
+        )
+        rows = response.json()
+        return [self._map_rag_resource_row(row) for row in rows]
+
+    async def count_rag_resources_in_workspace(self, *, owner_id: str, workspace_id: str) -> int:
+        response = await self._request(
+            "GET",
+            "rag_resources",
+            params={
+                "select": "id",
+                "owner_id": f"eq.{owner_id}",
+                "workspace_id": f"eq.{workspace_id}",
+            },
+        )
+        rows = response.json()
+        return len(rows)
+
+    async def update_rag_resource(self, resource_id: str, patch: dict[str, Any]) -> bool:
+        update_body = dict(patch)
+        update_body["updated_at"] = datetime.now(UTC).isoformat()
+        response = await self._request(
+            "PATCH",
+            "rag_resources",
+            params={"id": f"eq.{resource_id}"},
+            json_body=update_body,
+            extra_headers={"Prefer": "return=representation"},
+        )
+        rows = response.json()
+        return bool(rows)
+
+    async def delete_rag_resource(
+        self,
+        *,
+        resource_id: str,
+        owner_id: str,
+        workspace_id: str,
+    ) -> bool:
+        response = await self._request(
+            "DELETE",
+            "rag_resources",
+            params={
+                "id": f"eq.{resource_id}",
+                "owner_id": f"eq.{owner_id}",
+                "workspace_id": f"eq.{workspace_id}",
+            },
+            extra_headers={"Prefer": "return=representation"},
+        )
+        rows = response.json()
+        return bool(rows)
+
+    async def create_rag_ingestion_job(self, payload: dict[str, Any]) -> None:
+        body = {
+            "id": payload["job_id"],
+            "resource_id": payload["resource_id"],
+            "owner_id": payload["owner_id"],
+            "workspace_id": payload["workspace_id"],
+            "status": payload["status"],
+            "stage": payload["stage"],
+            "retries": payload["retries"],
+            "max_retries": payload["max_retries"],
+            "error_details": payload.get("error_details"),
+            "created_at": payload["created_at"],
+            "updated_at": payload["updated_at"],
+        }
+        await self._request("POST", "rag_ingestion_jobs", json_body=body)
+
+    async def get_rag_ingestion_job(self, job_id: str) -> dict[str, Any] | None:
+        response = await self._request(
+            "GET",
+            "rag_ingestion_jobs",
+            params={
+                "select": (
+                    "id,resource_id,owner_id,workspace_id,status,stage,retries,max_retries,"
+                    "error_details,created_at,updated_at"
+                ),
+                "id": f"eq.{job_id}",
+                "limit": "1",
+            },
+        )
+        rows = response.json()
+        if not rows:
+            return None
+        return self._map_rag_ingestion_row(rows[0])
+
+    async def get_latest_rag_ingestion_job_for_resource(
+        self,
+        *,
+        resource_id: str,
+        owner_id: str,
+        workspace_id: str,
+    ) -> dict[str, Any] | None:
+        response = await self._request(
+            "GET",
+            "rag_ingestion_jobs",
+            params={
+                "select": (
+                    "id,resource_id,owner_id,workspace_id,status,stage,retries,max_retries,"
+                    "error_details,created_at,updated_at"
+                ),
+                "resource_id": f"eq.{resource_id}",
+                "owner_id": f"eq.{owner_id}",
+                "workspace_id": f"eq.{workspace_id}",
+                "order": "created_at.desc",
+                "limit": "1",
+            },
+        )
+        rows = response.json()
+        if not rows:
+            return None
+        return self._map_rag_ingestion_row(rows[0])
+
+    async def list_rag_ingestion_jobs_for_processing(self, *, limit: int = 5) -> list[dict[str, Any]]:
+        response = await self._request(
+            "GET",
+            "rag_ingestion_jobs",
+            params={
+                "select": (
+                    "id,resource_id,owner_id,workspace_id,status,stage,retries,max_retries,"
+                    "error_details,created_at,updated_at"
+                ),
+                "status": "eq.queued",
+                "order": "created_at.asc",
+                "limit": str(limit),
+            },
+        )
+        rows = response.json()
+        return [self._map_rag_ingestion_row(row) for row in rows]
+
+    async def claim_rag_ingestion_job(self, job_id: str) -> bool:
+        """Atomically transition job status from 'queued' to 'running'.
+
+        Returns True if the claim succeeded (job was queued), False if already claimed.
+        """
+        update_body = {
+            "status": "running",
+            "stage": "claimed",
+            "updated_at": datetime.now(UTC).isoformat(),
+        }
+        response = await self._request(
+            "PATCH",
+            "rag_ingestion_jobs",
+            params={"id": f"eq.{job_id}", "status": "eq.queued"},
+            json_body=update_body,
+            extra_headers={"Prefer": "return=representation"},
+        )
+        rows = response.json()
+        return bool(rows)
+
+    async def update_rag_ingestion_job(self, job_id: str, patch: dict[str, Any]) -> bool:
+        update_body = dict(patch)
+        update_body["updated_at"] = datetime.now(UTC).isoformat()
+        response = await self._request(
+            "PATCH",
+            "rag_ingestion_jobs",
+            params={"id": f"eq.{job_id}"},
+            json_body=update_body,
+            extra_headers={"Prefer": "return=representation"},
+        )
+        rows = response.json()
+        return bool(rows)
+
+    # ------------------------------------------------------------------
+    # Event outbox
+    # ------------------------------------------------------------------
+
+    async def create_resource_job_and_outbox(
+        self,
+        resource_payload: dict[str, Any],
+        job_payload: dict[str, Any],
+        outbox_payload: dict[str, Any],
+    ) -> None:
+        """Atomically insert resource + ingestion job + outbox event in one DB transaction."""
+        await self._request(
+            "POST",
+            "rpc/create_resource_job_and_outbox",
+            json_body={
+                "p_resource": resource_payload,
+                "p_job": job_payload,
+                "p_outbox": outbox_payload,
+            },
+        )
+
+    async def claim_outbox_event(self, event_id: str) -> bool:
+        """Atomically transition an outbox event from pending -> dispatching.
+
+        Returns True if the claim succeeded, False if another dispatcher already claimed it.
+        """
+        response = await self._request(
+            "PATCH",
+            "event_outbox",
+            params={"id": f"eq.{event_id}", "status": "eq.pending"},
+            json_body={
+                "status": "dispatching",
+                "dispatched_at": datetime.now(UTC).isoformat(),
+            },
+            extra_headers={"Prefer": "return=representation"},
+        )
+        return bool(response.json())
+
+    async def reset_stuck_dispatching_events(self, older_than_seconds: int = 300) -> None:
+        """Reset dispatching rows stuck longer than the threshold back to pending."""
+        cutoff = (datetime.now(UTC) - timedelta(seconds=older_than_seconds)).isoformat()
+        await self._request(
+            "PATCH",
+            "event_outbox",
+            params={"status": "eq.dispatching", "dispatched_at": f"lt.{cutoff}"},
+            json_body={"status": "pending"},
+        )
+
+    async def insert_outbox_event(self, payload: dict[str, Any]) -> None:
+        body = {
+            "id": payload["id"],
+            "event_name": payload["event_name"],
+            "payload": payload["payload"],
+            "status": "pending",
+            "attempts": 0,
+            "next_attempt_at": payload.get("next_attempt_at", datetime.now(UTC).isoformat()),
+            "created_at": payload.get("created_at", datetime.now(UTC).isoformat()),
+        }
+        await self._request("POST", "event_outbox", json_body=body)
+
+    async def fetch_pending_outbox_events(self, *, limit: int = 50) -> list[dict[str, Any]]:
+        response = await self._request(
+            "GET",
+            "event_outbox",
+            params={
+                "select": (
+                    "id,event_name,payload,status,attempts,last_error,"
+                    "next_attempt_at,created_at,sent_at"
+                ),
+                "status": "eq.pending",
+                "next_attempt_at": f"lte.{datetime.now(UTC).isoformat()}",
+                "order": "created_at.asc",
+                "limit": str(limit),
+            },
+        )
+        return response.json()
+
+    async def update_outbox_event(self, event_id: str, patch: dict[str, Any]) -> None:
+        await self._request(
+            "PATCH",
+            "event_outbox",
+            params={"id": f"eq.{event_id}"},
+            json_body=patch,
+        )
+
+    async def upsert_rag_sidecar_artifact(
+        self,
+        *,
+        resource_id: str,
+        owner_id: str,
+        workspace_id: str,
+        source_locator: str,
+        chunks: list[str],
+    ) -> None:
+        payload = {
+            "resource_id": resource_id,
+            "owner_id": owner_id,
+            "workspace_id": workspace_id,
+            "source_locator": source_locator,
+            "chunks": chunks,
+            "updated_at": datetime.now(UTC).isoformat(),
+        }
+        await self._request(
+            "POST",
+            "rag_sidecar_artifacts",
+            json_body=payload,
+            extra_headers={"Prefer": "resolution=merge-duplicates"},
+        )
+
+    async def get_rag_sidecar_artifact(self, *, resource_id: str) -> dict[str, Any] | None:
+        response = await self._request(
+            "GET",
+            "rag_sidecar_artifacts",
+            params={
+                "select": "resource_id,owner_id,workspace_id,source_locator,chunks,updated_at",
+                "resource_id": f"eq.{resource_id}",
+                "limit": "1",
+            },
+        )
+        rows = response.json()
+        if not rows:
+            return None
+        return rows[0]
+
+    async def list_rag_sidecar_artifacts(
+        self,
+        *,
+        resource_ids: list[str],
+        owner_id: str,
+        workspace_id: str,
+    ) -> list[dict[str, Any]]:
+        if not resource_ids:
+            return []
+        joined = ",".join(resource_ids)
+        response = await self._request(
+            "GET",
+            "rag_sidecar_artifacts",
+            params={
+                "select": "resource_id,owner_id,workspace_id,source_locator,chunks,updated_at",
+                "resource_id": f"in.({joined})",
+                "owner_id": f"eq.{owner_id}",
+                "workspace_id": f"eq.{workspace_id}",
+            },
+        )
+        return response.json()
+
+    async def delete_rag_sidecar_artifact(self, *, resource_id: str) -> bool:
+        response = await self._request(
+            "DELETE",
+            "rag_sidecar_artifacts",
+            params={"resource_id": f"eq.{resource_id}"},
+            extra_headers={"Prefer": "return=representation"},
+        )
+        rows = response.json()
+        return bool(rows)
+
+    # ------------------------------------------------------------------
+    # RAG agents + linking
+    # ------------------------------------------------------------------
+
+    async def create_rag_agent(self, payload: dict[str, Any]) -> None:
+        body = {
+            "id": payload["agent_id"],
+            "owner_id": payload["owner_id"],
+            "workspace_id": payload["workspace_id"],
+            "name": payload["name"],
+            "description": payload["description"],
+            "system_instructions": payload["system_instructions"],
+            "created_at": payload["created_at"],
+            "updated_at": payload["updated_at"],
+        }
+        await self._request("POST", "rag_agents", json_body=body)
+
+    async def list_rag_agents(self, *, owner_id: str, workspace_id: str) -> list[dict[str, Any]]:
+        response = await self._request(
+            "GET",
+            "rag_agents",
+            params={
+                "select": "id,owner_id,workspace_id,name,description,system_instructions,created_at,updated_at",
+                "owner_id": f"eq.{owner_id}",
+                "workspace_id": f"eq.{workspace_id}",
+                "order": "created_at.desc",
+            },
+        )
+        agents = response.json()
+        if not agents:
+            return []
+
+        agent_ids = [a["id"] for a in agents]
+        links = await self._list_agent_links(agent_ids)
+        by_agent: dict[str, list[str]] = {}
+        for link in links:
+            by_agent.setdefault(link["agent_id"], []).append(link["resource_id"])
+
+        return [
+            self._map_rag_agent_row(row, by_agent.get(row["id"], []))
+            for row in agents
+        ]
+
+    async def get_rag_agent(
+        self,
+        *,
+        agent_id: str,
+        owner_id: str,
+        workspace_id: str,
+    ) -> dict[str, Any] | None:
+        response = await self._request(
+            "GET",
+            "rag_agents",
+            params={
+                "select": "id,owner_id,workspace_id,name,description,system_instructions,created_at,updated_at",
+                "id": f"eq.{agent_id}",
+                "owner_id": f"eq.{owner_id}",
+                "workspace_id": f"eq.{workspace_id}",
+                "limit": "1",
+            },
+        )
+        rows = response.json()
+        if not rows:
+            return None
+        links = await self._list_agent_links([agent_id])
+        resource_ids = [link["resource_id"] for link in links]
+        return self._map_rag_agent_row(rows[0], resource_ids)
+
+    async def update_rag_agent(
+        self,
+        *,
+        agent_id: str,
+        owner_id: str,
+        workspace_id: str,
+        patch: dict[str, Any],
+    ) -> bool:
+        update_body = dict(patch)
+        update_body["updated_at"] = datetime.now(UTC).isoformat()
+        response = await self._request(
+            "PATCH",
+            "rag_agents",
+            params={
+                "id": f"eq.{agent_id}",
+                "owner_id": f"eq.{owner_id}",
+                "workspace_id": f"eq.{workspace_id}",
+            },
+            json_body=update_body,
+            extra_headers={"Prefer": "return=representation"},
+        )
+        rows = response.json()
+        return bool(rows)
+
+    async def replace_rag_agent_resources(
+        self,
+        *,
+        agent_id: str,
+        owner_id: str,
+        workspace_id: str,
+        resource_ids: list[str],
+    ) -> None:
+        await self._request(
+            "DELETE",
+            "rag_agent_resources",
+            params={
+                "agent_id": f"eq.{agent_id}",
+                "owner_id": f"eq.{owner_id}",
+                "workspace_id": f"eq.{workspace_id}",
+            },
+        )
+        if not resource_ids:
+            return
+        rows = [
+            {
+                "agent_id": agent_id,
+                "resource_id": resource_id,
+                "owner_id": owner_id,
+                "workspace_id": workspace_id,
+            }
+            for resource_id in resource_ids
+        ]
+        await self._request("POST", "rag_agent_resources", json_body=rows)
+
+    async def _list_agent_links(self, agent_ids: list[str]) -> list[dict[str, str]]:
+        if not agent_ids:
+            return []
+        joined = ",".join(agent_ids)
+        response = await self._request(
+            "GET",
+            "rag_agent_resources",
+            params={
+                "select": "agent_id,resource_id",
+                "agent_id": f"in.({joined})",
+            },
+        )
+        return response.json()
+
+    # ------------------------------------------------------------------
+    # RAG chat sessions + messages
+    # ------------------------------------------------------------------
+
+    async def create_rag_chat_session(self, payload: dict[str, Any]) -> None:
+        body = {
+            "id": payload["session_id"],
+            "owner_id": payload["owner_id"],
+            "workspace_id": payload["workspace_id"],
+            "agent_id": payload["agent_id"],
+            "created_at": datetime.now(UTC).isoformat(),
+        }
+        await self._request("POST", "rag_chat_sessions", json_body=body)
+
+    async def get_rag_chat_session(
+        self,
+        *,
+        session_id: str,
+        owner_id: str,
+        agent_id: str,
+    ) -> dict[str, Any] | None:
+        response = await self._request(
+            "GET",
+            "rag_chat_sessions",
+            params={
+                "select": "id,owner_id,workspace_id,agent_id,created_at",
+                "id": f"eq.{session_id}",
+                "owner_id": f"eq.{owner_id}",
+                "agent_id": f"eq.{agent_id}",
+                "limit": "1",
+            },
+        )
+        rows = response.json()
+        if not rows:
+            return None
+        row = rows[0]
+        return {
+            "session_id": row["id"],
+            "owner_id": row["owner_id"],
+            "workspace_id": row["workspace_id"],
+            "agent_id": row["agent_id"],
+            "created_at": row.get("created_at"),
+        }
+
+    async def create_rag_chat_message(self, payload: dict[str, Any]) -> None:
+        body = {
+            "id": payload["message_id"],
+            "session_id": payload["session_id"],
+            "agent_id": payload["agent_id"],
+            "owner_id": payload["owner_id"],
+            "role": payload["role"],
+            "content": payload["content"],
+            "citations": payload.get("citations") or [],
+            "created_at": payload["created_at"],
+        }
+        await self._request("POST", "rag_chat_messages", json_body=body)
+
+    async def list_rag_chat_messages(self, *, session_id: str, owner_id: str) -> list[dict[str, Any]]:
+        response = await self._request(
+            "GET",
+            "rag_chat_messages",
+            params={
+                "select": "id,session_id,agent_id,owner_id,role,content,citations,created_at",
+                "session_id": f"eq.{session_id}",
+                "owner_id": f"eq.{owner_id}",
+                "order": "created_at.asc",
+            },
+        )
+        rows = response.json()
+        return [
+            {
+                "message_id": row["id"],
+                "session_id": row["session_id"],
+                "agent_id": row["agent_id"],
+                "owner_id": row["owner_id"],
+                "role": row["role"],
+                "content": row["content"],
+                "citations": row.get("citations") or [],
+                "created_at": row.get("created_at"),
+            }
+            for row in rows
+        ]
+
+    @staticmethod
+    def _map_rag_resource_row(row: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "resource_id": row["id"],
+            "owner_id": row["owner_id"],
+            "workspace_id": row["workspace_id"],
+            "filename": row["filename"],
+            "mime_type": row["mime_type"],
+            "byte_size": row["byte_size"],
+            "storage_uri": row["storage_uri"],
+            "state": row["state"],
+            "error_details": row.get("error_details"),
+            "created_at": row.get("created_at"),
+            "updated_at": row.get("updated_at"),
+        }
+
+    @staticmethod
+    def _map_rag_ingestion_row(row: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "job_id": row["id"],
+            "resource_id": row["resource_id"],
+            "owner_id": row["owner_id"],
+            "workspace_id": row["workspace_id"],
+            "status": row["status"],
+            "stage": row["stage"],
+            "retries": row["retries"],
+            "max_retries": row["max_retries"],
+            "error_details": row.get("error_details"),
+            "created_at": row.get("created_at"),
+            "updated_at": row.get("updated_at"),
+        }
+
+    @staticmethod
+    def _map_rag_agent_row(row: dict[str, Any], resource_ids: list[str]) -> dict[str, Any]:
+        return {
+            "agent_id": row["id"],
+            "owner_id": row["owner_id"],
+            "workspace_id": row["workspace_id"],
+            "name": row["name"],
+            "description": row.get("description") or "",
+            "system_instructions": row.get("system_instructions") or "",
+            "linked_resource_ids": resource_ids,
+            "created_at": row.get("created_at"),
+            "updated_at": row.get("updated_at"),
+        }

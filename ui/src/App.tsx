@@ -14,6 +14,7 @@ import {
 import { ChatForm } from './components/ChatForm'
 import { FollowupChat } from './components/FollowupChat'
 import { Layout } from './components/Layout'
+import { RagAgentMode } from './components/RagAgentMode'
 import { ReportViewer } from './components/ReportViewer'
 import { ResearchProgress } from './components/ResearchProgress'
 import { supabase } from './lib/supabase'
@@ -25,6 +26,7 @@ import type {
 } from './types'
 
 type HealthState = 'loading' | 'online' | 'offline'
+type AppMode = 'research' | 'rag_agent'
 
 function App() {
   const [health, setHealth] = useState<HealthState>('loading')
@@ -34,6 +36,7 @@ function App() {
   const [lastQuery, setLastQuery] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [authSession, setAuthSession] = useState<Session | null>(null)
+  const [mode, setMode] = useState<AppMode>('research')
 
   // Session state
   const [sessionId, setSessionId] = useState<string | null>(null)
@@ -347,7 +350,11 @@ function App() {
   return (
     <Layout
       title="Research Agent"
-      subtitle="Stream multi-step research progress and view final markdown reports."
+      subtitle={
+        mode === 'research'
+          ? 'Stream multi-step research progress and view final markdown reports.'
+          : 'Upload resources, build custom agents, and chat with grounded context.'
+      }
       status={healthIndicator}
       actions={
         authSession ? (
@@ -361,7 +368,7 @@ function App() {
         )
       }
       sidebar={
-        authSession ? (
+        authSession && mode === 'research' ? (
           <div className="sessions-menu">
             <h2>Past sessions</h2>
             {userSessions.length > 0 && (
@@ -424,23 +431,45 @@ function App() {
         ) : null
       }
     >
-      <ChatForm onSubmit={handleSubmit} disabled={isStreaming || !authSession} isStreaming={isStreaming} />
-      <ResearchProgress events={events} isStreaming={isStreaming} />
-      <ReportViewer
-        report={report}
-        query={lastQuery}
-        isStreaming={isStreaming}
-        error={error}
-      />
-      {report && sessionId && (
-        <FollowupChat
-          key={sessionId}
-          sessionId={sessionId}
-          runId={runId}
-          accessToken={authSession?.access_token ?? null}
-          conversation={conversation}
-          onConversationUpdate={handleConversationUpdate}
-        />
+      <div className="mode-switch-row">
+        <button
+          type="button"
+          className={`auth-button ${mode === 'research' ? 'mode-button-active' : ''}`}
+          onClick={() => setMode('research')}
+        >
+          Research
+        </button>
+        <button
+          type="button"
+          className={`auth-button ${mode === 'rag_agent' ? 'mode-button-active' : ''}`}
+          onClick={() => setMode('rag_agent')}
+        >
+          RAG Agent
+        </button>
+      </div>
+      {mode === 'research' ? (
+        <>
+          <ChatForm onSubmit={handleSubmit} disabled={isStreaming || !authSession} isStreaming={isStreaming} />
+          <ResearchProgress events={events} isStreaming={isStreaming} />
+          <ReportViewer
+            report={report}
+            query={lastQuery}
+            isStreaming={isStreaming}
+            error={error}
+          />
+          {report && sessionId && (
+            <FollowupChat
+              key={sessionId}
+              sessionId={sessionId}
+              runId={runId}
+              accessToken={authSession?.access_token ?? null}
+              conversation={conversation}
+              onConversationUpdate={handleConversationUpdate}
+            />
+          )}
+        </>
+      ) : (
+        <RagAgentMode accessToken={authSession?.access_token ?? null} />
       )}
       {renameSessionId && (
         <div className="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="rename-session-title">
