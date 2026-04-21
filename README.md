@@ -10,12 +10,12 @@ flowchart LR
     userQuery["User query"] --> search["search (Tavily)"]
     search -->|"continue"| retrieve["retrieve (httpx + BeautifulSoup)"]
     search -->|"abort on error"| abortNode["abort"]
-    retrieve -->|"ok"| memoryContext["memory_context (Chroma search)"]
+    retrieve -->|"ok"| memoryContext["memory_context (Pinecone search)"]
     retrieve -->|"empty"| emptyNode["empty"]
     memoryContext --> summarize["summarize (LLM)"]
     summarize --> combine["combine (LLM)"]
     combine --> report["report (LLM markdown)"]
-    report --> vectorStore["vector_store (optional Chroma persist)"]
+    report --> vectorStore["vector_store (optional Pinecone persist)"]
     vectorStore --> endNode["END"]
     abortNode --> endNode
     emptyNode --> endNode
@@ -63,7 +63,7 @@ Reliability patterns used:
 | Retrieval & Parsing | httpx, BeautifulSoup4 |
 | API | FastAPI, Uvicorn, SSE |
 | CLI | Typer, Rich |
-| Vector Memory | ChromaDB |
+| Vector Memory | Pinecone |
 | Frontend | React 19, Vite, react-markdown, lucide-react |
 | Code Quality | Pytest, Ruff, mypy, ESLint |
 
@@ -76,7 +76,7 @@ Reliability patterns used:
 | Retry logic | Exponential back-off on search and fetch |
 | Streaming API | FastAPI SSE endpoint for real-time progress |
 | CLI | Typer + Rich for beautiful terminal output |
-| Vector storage | ChromaDB for persisting and searching reports |
+| Vector storage | Pinecone for persisting and searching reports |
 | Research sessions | Supabase Postgres session store tracks runs and conversation history |
 | Strict user isolation | All session endpoints are auth-protected and scoped per authenticated user |
 | Session management UX | Left sidebar with past sessions, LLM-generated titles, rename (double-click), delete (right-click) |
@@ -110,7 +110,7 @@ python -m src.main search "What is LangGraph?"
 # Save report to file
 python -m src.main search "What is LangGraph?" --output report.md
 
-# Also persist to ChromaDB
+# Also persist to Pinecone
 python -m src.main search "What is LangGraph?" --vector-store
 
 # Start the API server
@@ -253,7 +253,7 @@ The pipeline includes end-to-end LangSmith instrumentation, so you can track the
 
 - A single **root run** is created per workflow execution (CLI or API).
 - Every graph node (`search`, `retrieve`, `memory_context`, `summarize`, `combine`, `report`, `vector_store`) is traced as a child span.
-- External operations are traced as nested spans (Tavily search, URL fetch, LLM calls, Chroma reads/writes).
+- External operations are traced as nested spans (Tavily search, URL fetch, LLM calls, Pinecone reads/writes).
 - Routing and terminal outcomes are visible (`continue`, `abort`, `empty`) with status and timing context.
 - Redaction-by-default protects sensitive payloads while preserving useful debugging metadata.
 
@@ -268,8 +268,13 @@ You get full observability from input to final report: where time is spent, wher
 | `OPENAI_MODEL` | `gpt-4o-mini` | OpenAI model name |
 | `OLLAMA_BASE_URL` | `http://localhost:11434` | Ollama server URL |
 | `OLLAMA_MODEL` | `llama3.2` | Ollama model name |
+| `EMBEDDING_PROVIDER` | `openai` | Embedding provider: `openai` or `ollama` |
+| `EMBEDDING_MODEL` | `text-embedding-3-small` | Embedding model name |
+| `EMBEDDING_BASE_URL` | `http://localhost:11434` | Base URL for Ollama embeddings |
+| `EMBEDDING_DIMENSIONS` | `1536` | Expected vector size for the configured embedding model/index |
 | `TAVILY_API_KEY` | — | Required for web search |
-| `CHROMA_PERSIST_DIRECTORY` | `./chroma_db` | ChromaDB storage path |
+| `PINECONE_API_KEY` | — | Pinecone API key |
+| `PINECONE_INDEX_NAME` | `research-agent-openai-small` | Pinecone index name for the active embedding model |
 | `MAX_SEARCH_RESULTS` | `5` | Number of Tavily results |
 | `LANGSMITH_TRACING` | `false` | Enable LangSmith tracing (`true`/`false`) |
 | `LANGSMITH_PROJECT` | `research-agent` | LangSmith project name |
@@ -286,6 +291,31 @@ You get full observability from input to final report: where time is spent, wher
 | `RAG_SIGNED_URL_TTL_SECONDS` | `600` | Signed URL TTL used to pull uploads during ingestion |
 | `INNGEST_DEV` | — | Set to `1` for local dev (disables signing key requirement) |
 | `INNGEST_EVENT_KEY` | — | Inngest event key (required in production) |
+
+Embedding index guidance:
+- Use one Pinecone index per embedding provider/model combination.
+- Do not mix vectors from different embedding models in the same index.
+- If you switch `EMBEDDING_PROVIDER` or `EMBEDDING_MODEL`, also switch `PINECONE_INDEX_NAME`.
+- Existing vectors must be re-embedded into the new index if you want them searchable after a model switch.
+
+Example configs:
+
+```bash
+# OpenAI embeddings
+EMBEDDING_PROVIDER=openai
+EMBEDDING_MODEL=text-embedding-3-small
+EMBEDDING_DIMENSIONS=1536
+PINECONE_INDEX_NAME=research-agent-openai-small
+```
+
+```bash
+# Ollama embeddings
+EMBEDDING_PROVIDER=ollama
+EMBEDDING_MODEL=nomic-embed-text
+EMBEDDING_BASE_URL=http://localhost:11434
+EMBEDDING_DIMENSIONS=768
+PINECONE_INDEX_NAME=research-agent-ollama-nomic
+```
 
 Session endpoints now require a bearer token from Supabase Auth. The recommended UI flow is Google OAuth via Supabase on the frontend, then forwarding `Authorization: Bearer <access_token>` for session endpoints.
 Session persistence is intentionally a hard requirement: server startup validates Supabase configuration and fails fast if required vars are missing.

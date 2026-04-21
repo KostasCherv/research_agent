@@ -1,6 +1,7 @@
 """Tests for src/tools/vector_store.py"""
 
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
+
 import pytest
 
 from src.errors import VectorStoreError
@@ -8,33 +9,30 @@ from src.errors import VectorStoreError
 
 def _make_manager():
     from src.tools.vector_store import VectorStoreManager
+
     return VectorStoreManager()
 
 
 def _make_manager_with_mocks():
-    """Return (manager, mock_index, mock_openai_client) with embeddings pre-configured."""
+    """Return (manager, mock_index, mock_pinecone_client, mock_embedding_client)."""
     manager = _make_manager()
 
     mock_index = MagicMock()
+    mock_pinecone = MagicMock()
+    mock_index_info = MagicMock()
+    mock_index_info.dimension = 1536
+    mock_pinecone.describe_index.return_value = mock_index_info
+
     manager._index = mock_index
+    manager._pinecone_client = mock_pinecone
+    manager._embedding_client = MagicMock()
+    manager._embedding_client.embed_texts.return_value = [[0.1] * 1536]
 
-    mock_openai = MagicMock()
-    fake_embedding = MagicMock()
-    fake_embedding.embedding = [0.1] * 1536
-    mock_embed_response = MagicMock()
-    mock_embed_response.data = [fake_embedding]
-    mock_openai.embeddings.create.return_value = mock_embed_response
-    manager._openai_client = mock_openai
+    return manager, mock_index, mock_pinecone, manager._embedding_client
 
-    return manager, mock_index, mock_openai
-
-
-# ---------------------------------------------------------------------------
-# save_report / search_reports
-# ---------------------------------------------------------------------------
 
 def test_save_report_calls_index_upsert():
-    manager, mock_index, _ = _make_manager_with_mocks()
+    manager, mock_index, _, _ = _make_manager_with_mocks()
 
     doc_id = manager.save_report(query="LangGraph", report="# Report")
 
@@ -50,7 +48,7 @@ def test_save_report_calls_index_upsert():
 
 
 def test_save_report_raises_vector_store_error_on_failure():
-    manager, mock_index, _ = _make_manager_with_mocks()
+    manager, mock_index, _, _ = _make_manager_with_mocks()
     mock_index.upsert.side_effect = RuntimeError("pinecone down")
 
     with pytest.raises(VectorStoreError, match="pinecone down"):
@@ -58,7 +56,7 @@ def test_save_report_raises_vector_store_error_on_failure():
 
 
 def test_search_reports_returns_structured_list():
-    manager, mock_index, _ = _make_manager_with_mocks()
+    manager, mock_index, _, _ = _make_manager_with_mocks()
     mock_match = MagicMock()
     mock_match.id = "report_001"
     mock_match.metadata = {
@@ -77,25 +75,16 @@ def test_search_reports_returns_structured_list():
 
 
 def test_search_reports_raises_on_failure():
-    manager, mock_index, _ = _make_manager_with_mocks()
+    manager, mock_index, _, _ = _make_manager_with_mocks()
     mock_index.query.side_effect = RuntimeError("query failed")
 
     with pytest.raises(VectorStoreError, match="query failed"):
         manager.search_reports("anything")
 
 
-# ---------------------------------------------------------------------------
-# save_source_chunks / search_run_sources
-# ---------------------------------------------------------------------------
-
 def test_save_source_chunks_calls_upsert():
-    manager, mock_index, _ = _make_manager_with_mocks()
-    # Return enough fake embeddings for all chunks
-    fake_embedding = MagicMock()
-    fake_embedding.embedding = [0.1] * 1536
-    manager._openai_client.embeddings.create.return_value = MagicMock(
-        data=[fake_embedding, fake_embedding]
-    )
+    manager, mock_index, _, mock_embedding_client = _make_manager_with_mocks()
+    mock_embedding_client.embed_texts.return_value = [[0.1] * 1536, [0.1] * 1536]
 
     sources = [
         {"url": "https://a.com", "title": "A", "raw_text": "Some content about topic A."},
@@ -105,7 +94,6 @@ def test_save_source_chunks_calls_upsert():
 
     assert count > 0
     mock_index.upsert.assert_called()
-    # Check the first upsert batch
     call_kwargs = mock_index.upsert.call_args.kwargs
     assert call_kwargs["namespace"] == "source_chunks"
     vectors = call_kwargs["vectors"]
@@ -117,14 +105,14 @@ def test_save_source_chunks_calls_upsert():
 
 
 def test_save_source_chunks_returns_zero_for_empty_sources():
-    manager, mock_index, _ = _make_manager_with_mocks()
+    manager, mock_index, _, _ = _make_manager_with_mocks()
     count = manager.save_source_chunks(run_id="run-1", session_id="sess-1", sources=[])
     assert count == 0
     mock_index.upsert.assert_not_called()
 
 
 def test_search_run_sources_returns_structured_list():
-    manager, mock_index, _ = _make_manager_with_mocks()
+    manager, mock_index, _, _ = _make_manager_with_mocks()
     mock_match = MagicMock()
     mock_match.metadata = {
         "run_id": "run-1",
@@ -143,26 +131,37 @@ def test_search_run_sources_returns_structured_list():
     assert results[0]["source_url"] == "https://a.com"
     assert results[0]["source_title"] == "A"
 
-    # Ensure run_id filter is applied
     call_kwargs = mock_index.query.call_args.kwargs
     assert call_kwargs["filter"] == {"run_id": {"$eq": "run-1"}}
     assert call_kwargs["namespace"] == "source_chunks"
 
 
 def test_search_run_sources_returns_empty_when_no_chunks():
-    manager, mock_index, _ = _make_manager_with_mocks()
+    manager, mock_index, _, _ = _make_manager_with_mocks()
     mock_index.query.return_value = MagicMock(matches=[])
 
     results = manager.search_run_sources("query text", run_id="run-1")
 
     assert results == []
-    # Pinecone always queries — it returns empty matches, no short-circuit
     mock_index.query.assert_called_once()
 
 
 def test_search_run_sources_raises_on_failure():
-    manager, mock_index, _ = _make_manager_with_mocks()
+    manager, mock_index, _, _ = _make_manager_with_mocks()
     mock_index.query.side_effect = RuntimeError("query error")
 
     with pytest.raises(VectorStoreError, match="query error"):
         manager.search_run_sources("anything", run_id="run-1")
+
+
+def test_dimension_mismatch_raises_clear_error():
+    manager, _, mock_pinecone, _ = _make_manager_with_mocks()
+    mock_index_info = MagicMock()
+    mock_index_info.dimension = 768
+    mock_pinecone.describe_index.return_value = mock_index_info
+
+    with patch("src.tools.vector_store.settings") as mock_settings:
+        mock_settings.pinecone_index_name = "research-agent-ollama-nomic"
+        mock_settings.embedding_dimensions = 1536
+        with pytest.raises(VectorStoreError, match="does not match the configured embedding dimensions"):
+            manager.save_report(query="LangGraph", report="# Report")
