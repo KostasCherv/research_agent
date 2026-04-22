@@ -1,0 +1,102 @@
+import { CheckCircle2, CircleDot, Loader2, XCircle } from 'lucide-react'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { cn } from '@/lib/utils'
+import type { ResearchStreamEvent } from '@/types'
+
+const NODE_ALIASES: Record<string, string> = {
+  search: 'search_node',
+  retrieve: 'retrieve_node',
+  summarize: 'summarize_node',
+  combine: 'combine_node',
+  report: 'report_node',
+  vector_store: 'vector_store_node',
+  abort: '__error__',
+}
+
+const NODE_LABELS: Record<string, string> = {
+  search_node: 'Searching',
+  retrieve_node: 'Retrieving Sources',
+  summarize_node: 'Summarizing',
+  combine_node: 'Combining Insights',
+  report_node: 'Generating Report',
+  vector_store_node: 'Storing Report',
+  __end__: 'Completed',
+  __error__: 'Failed',
+}
+
+const ORDERED_PHASES = [
+  'search_node',
+  'retrieve_node',
+  'summarize_node',
+  'combine_node',
+  'report_node',
+  'vector_store_node',
+]
+
+type Props = {
+  events: ResearchStreamEvent[]
+  isStreaming: boolean
+}
+
+export function ResearchProgress({ events, isStreaming }: Props) {
+  if (events.length === 0 && !isStreaming) return null
+
+  const normalizedNodes = events.map((e) => NODE_ALIASES[e.node] ?? e.node)
+  const seenNodes = new Set(normalizedNodes)
+  const latestNode = normalizedNodes.at(-1) ?? null
+  const latestIndex = latestNode ? ORDERED_PHASES.indexOf(latestNode) : -1
+  const hasError = seenNodes.has('__error__')
+  const ended = seenNodes.has('__end__')
+
+  return (
+    <Card>
+      <CardHeader className="pb-3">
+        <CardTitle className="text-base">Progress</CardTitle>
+      </CardHeader>
+      <CardContent>
+        <ul className="space-y-2" aria-live="polite">
+          {ORDERED_PHASES.map((node, index) => {
+            const complete = seenNodes.has(node) && (latestIndex > index || ended)
+            const current = latestNode === node && isStreaming
+            return (
+              <li key={node} className="flex items-center gap-2 text-sm">
+                {complete ? (
+                  <CheckCircle2 size={16} className="text-green-500 shrink-0" />
+                ) : current ? (
+                  <Loader2 size={16} className="animate-spin text-primary shrink-0" />
+                ) : (
+                  <CircleDot
+                    size={16}
+                    className={cn(
+                      'shrink-0',
+                      seenNodes.has(node) ? 'text-foreground' : 'text-muted-foreground',
+                    )}
+                  />
+                )}
+                <span
+                  className={cn(
+                    complete || seenNodes.has(node) ? 'text-foreground' : 'text-muted-foreground',
+                  )}
+                >
+                  {NODE_LABELS[node] ?? node}
+                </span>
+              </li>
+            )
+          })}
+          {hasError && (
+            <li className="flex items-center gap-2 text-sm">
+              <XCircle size={16} className="text-destructive shrink-0" />
+              <span className="text-destructive">Failed</span>
+            </li>
+          )}
+          {ended && (
+            <li className="flex items-center gap-2 text-sm">
+              <CheckCircle2 size={16} className="text-green-500 shrink-0" />
+              <span>Completed</span>
+            </li>
+          )}
+        </ul>
+      </CardContent>
+    </Card>
+  )
+}

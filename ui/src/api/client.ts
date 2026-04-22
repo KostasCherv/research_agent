@@ -436,6 +436,19 @@ export async function createRagAgent(
   return (await response.json()) as { agent: RagAgent }
 }
 
+export async function deleteRagAgent(
+  agentId: string,
+  accessToken: string | null,
+): Promise<void> {
+  const response = await fetch(`${API_BASE}/api/rag/agents/${agentId}`, {
+    method: 'DELETE',
+    headers: authHeaders(accessToken),
+  })
+  if (!response.ok) {
+    throw new Error(`Failed to delete agent: ${response.status}`)
+  }
+}
+
 export async function listRagAgents(
   accessToken: string | null,
 ): Promise<{ agents: RagAgent[] }> {
