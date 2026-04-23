@@ -4,6 +4,7 @@ import type {
   HealthResponse,
   RagAgent,
   RagChatMessage,
+  RagChatSessionSummary,
   RagResource,
   ResearchRequest,
   ResearchStreamEvent,
@@ -517,4 +518,38 @@ export async function chatWithRagAgent(
     throw new Error(`Failed to chat with RAG agent: ${response.status}`)
   }
   return (await response.json()) as { session_id: string; messages: RagChatMessage[] }
+}
+
+export async function listRagAgentChatSessions(
+  agentId: string,
+  accessToken: string | null,
+): Promise<{ sessions: RagChatSessionSummary[] }> {
+  const response = await fetch(`${API_BASE}/api/rag/agents/${agentId}/chat/sessions`, {
+    headers: authHeaders(accessToken),
+  })
+  if (!response.ok) {
+    throw new Error(`Failed to list RAG agent chat sessions: ${response.status}`)
+  }
+  return (await response.json()) as { sessions: RagChatSessionSummary[] }
+}
+
+export async function getRagAgentChatSessionMessages(
+  agentId: string,
+  sessionId: string,
+  accessToken: string | null,
+): Promise<{ session_id: string; agent_id: string; messages: RagChatMessage[] }> {
+  const response = await fetch(
+    `${API_BASE}/api/rag/agents/${agentId}/chat/sessions/${sessionId}/messages`,
+    {
+      headers: authHeaders(accessToken),
+    },
+  )
+  if (!response.ok) {
+    throw new Error(`Failed to load RAG agent chat session: ${response.status}`)
+  }
+  return (await response.json()) as {
+    session_id: string
+    agent_id: string
+    messages: RagChatMessage[]
+  }
 }

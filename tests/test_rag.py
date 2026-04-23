@@ -7,6 +7,8 @@ from src.rag import (
     RagValidationError,
     _run_ingestion_job,
     create_resource_and_ingest,
+    get_chat_session,
+    list_chat_sessions,
     process_queued_ingestion_jobs,
     run_ingestion_job_now,
 )
@@ -20,6 +22,63 @@ async def test_create_resource_rejects_unsupported_extension():
             assert False, "Expected RagValidationError"
         except RagValidationError as exc:
             assert exc.code == "unsupported_type"
+
+
+async def test_list_chat_sessions_returns_agent_scoped_summaries():
+    mock_store = AsyncMock()
+    mock_store.list_rag_chat_sessions.return_value = [
+        {
+            "session_id": "chat-2",
+            "agent_id": "agent-1",
+            "owner_id": "user-1",
+            "created_at": "2026-04-23T09:00:00+00:00",
+            "last_message_at": "2026-04-23T09:05:00+00:00",
+            "last_message_preview": "Latest answer",
+        },
+        {
+            "session_id": "chat-1",
+            "agent_id": "agent-1",
+            "owner_id": "user-1",
+            "created_at": "2026-04-22T09:00:00+00:00",
+            "last_message_at": "2026-04-22T09:01:00+00:00",
+            "last_message_preview": "Earlier answer",
+        },
+    ]
+
+    with patch("src.rag._get_store", return_value=mock_store):
+        sessions = await list_chat_sessions(agent_id="agent-1", user_id="user-1")
+
+    mock_store.list_rag_chat_sessions.assert_awaited_once_with(
+        agent_id="agent-1",
+        owner_id="user-1",
+    )
+    assert sessions[0]["session_id"] == "chat-2"
+    assert sessions[0]["last_message_preview"] == "Latest answer"
+
+
+async def test_get_chat_session_is_scoped_to_owner_and_agent():
+    mock_store = AsyncMock()
+    mock_store.get_rag_chat_session.return_value = {
+        "session_id": "chat-1",
+        "agent_id": "agent-1",
+        "owner_id": "user-1",
+        "created_at": "2026-04-23T09:00:00+00:00",
+    }
+
+    with patch("src.rag._get_store", return_value=mock_store):
+        session = await get_chat_session(
+            session_id="chat-1",
+            agent_id="agent-1",
+            user_id="user-1",
+        )
+
+    mock_store.get_rag_chat_session.assert_awaited_once_with(
+        session_id="chat-1",
+        owner_id="user-1",
+        agent_id="agent-1",
+    )
+    assert session is not None
+    assert session["session_id"] == "chat-1"
 
 
 async def test_run_ingestion_job_marks_ready_on_success():

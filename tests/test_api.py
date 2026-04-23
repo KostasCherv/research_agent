@@ -403,5 +403,87 @@ def test_rag_chat_returns_agent_reply():
     assert payload["session_id"] == "chat-1"
 
 
+def test_rag_chat_sessions_returns_agent_scoped_summaries():
+    mock_agent = MagicMock()
+    with (
+        patch("src.api.endpoints.get_agent_for_chat", new=AsyncMock(return_value=(mock_agent, ["res-1"]))),
+        patch(
+            "src.api.endpoints.list_rag_chat_sessions",
+            new=AsyncMock(
+                return_value=[
+                    {
+                        "session_id": "chat-1",
+                        "agent_id": "agent-1",
+                        "owner_id": "test-user",
+                        "created_at": "2026-04-23T09:00:00+00:00",
+                        "last_message_at": "2026-04-23T09:05:00+00:00",
+                        "last_message_preview": "What is the refund window?",
+                    }
+                ]
+            ),
+        ),
+    ):
+        response = client.get("/api/rag/agents/agent-1/chat/sessions")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["sessions"][0]["session_id"] == "chat-1"
+    assert payload["sessions"][0]["last_message_preview"] == "What is the refund window?"
+
+
+def test_rag_chat_sessions_returns_404_for_unknown_agent():
+    with patch("src.api.endpoints.get_agent_for_chat", new=AsyncMock(return_value=None)):
+        response = client.get("/api/rag/agents/agent-404/chat/sessions")
+
+    assert response.status_code == 404
+
+
+def test_rag_chat_session_messages_returns_scoped_messages():
+    mock_agent = MagicMock()
+    mock_message = MagicMock()
+    mock_message.to_dict.return_value = {
+        "message_id": "msg-1",
+        "session_id": "chat-1",
+        "agent_id": "agent-1",
+        "owner_id": "test-user",
+        "role": "user",
+        "content": "Hello",
+        "citations": [],
+        "created_at": "2026-04-23T09:00:00+00:00",
+    }
+    with (
+        patch("src.api.endpoints.get_agent_for_chat", new=AsyncMock(return_value=(mock_agent, ["res-1"]))),
+        patch(
+            "src.api.endpoints.get_rag_chat_session",
+            new=AsyncMock(
+                return_value={
+                    "session_id": "chat-1",
+                    "agent_id": "agent-1",
+                    "owner_id": "test-user",
+                    "created_at": "2026-04-23T09:00:00+00:00",
+                }
+            ),
+        ),
+        patch("src.api.endpoints.list_rag_chat_messages", new=AsyncMock(return_value=[mock_message])),
+    ):
+        response = client.get("/api/rag/agents/agent-1/chat/sessions/chat-1/messages")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["session_id"] == "chat-1"
+    assert payload["messages"] == [mock_message.to_dict.return_value]
+
+
+def test_rag_chat_session_messages_returns_404_for_unknown_session():
+    mock_agent = MagicMock()
+    with (
+        patch("src.api.endpoints.get_agent_for_chat", new=AsyncMock(return_value=(mock_agent, ["res-1"]))),
+        patch("src.api.endpoints.get_rag_chat_session", new=AsyncMock(return_value=None)),
+    ):
+        response = client.get("/api/rag/agents/agent-1/chat/sessions/chat-404/messages")
+
+    assert response.status_code == 404
+
+
 def _async_iter(items):
     return _async_iter_impl(items)
