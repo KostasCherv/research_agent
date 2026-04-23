@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { SendHorizontal } from 'lucide-react'
+import ReactMarkdown from 'react-markdown'
 import { streamFollowup } from '@/api/client'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -27,6 +28,14 @@ function CitationBadges({ citations }: { citations: Citation[] }) {
           </Badge>
         </a>
       ))}
+    </div>
+  )
+}
+
+function MarkdownMessage({ content }: { content: string }) {
+  return (
+    <div className="prose prose-sm dark:prose-invert max-w-none prose-p:my-0 prose-ul:my-1 prose-ol:my-1 prose-li:my-0 prose-pre:my-2 prose-code:before:content-none prose-code:after:content-none">
+      <ReactMarkdown>{content}</ReactMarkdown>
     </div>
   )
 }
@@ -191,7 +200,7 @@ export function FollowupChat({
                   AI
                 </div>
                 <div className="max-w-[80%] rounded-2xl rounded-bl-sm px-3 py-2 text-sm bg-muted">
-                  {turn.content}
+                  <MarkdownMessage content={turn.content} />
                   <CitationBadges citations={turn.citations} />
                 </div>
               </div>
@@ -204,7 +213,7 @@ export function FollowupChat({
                 AI
               </div>
               <div className="max-w-[80%] rounded-2xl rounded-bl-sm px-3 py-2 text-sm bg-muted">
-                {streamingText || 'Thinking...'}
+                <MarkdownMessage content={streamingText || 'Thinking...'} />
               </div>
             </div>
           )}
