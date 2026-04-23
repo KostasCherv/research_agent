@@ -366,6 +366,28 @@ def test_rag_upload_maps_validation_errors():
     assert detail["code"] == "unsupported_type"
 
 
+def test_rag_upload_dispatches_outbox_after_success():
+    mock_resource = MagicMock()
+    mock_resource.to_dict.return_value = {"resource_id": "r-1", "state": "uploaded"}
+    mock_job = MagicMock()
+    mock_job.to_dict.return_value = {"job_id": "j-1", "status": "queued"}
+
+    with (
+        patch(
+            "src.api.endpoints.create_resource_and_ingest",
+            new=AsyncMock(return_value=(mock_resource, mock_job)),
+        ),
+        patch("src.outbox.dispatch_outbox_events", new=AsyncMock(return_value=1)) as mock_dispatch,
+    ):
+        response = client.post(
+            "/api/rag/resources/upload",
+            files={"file": ("test.txt", b"hello", "text/plain")},
+        )
+
+    assert response.status_code == 200
+    mock_dispatch.assert_awaited_once_with(limit=10)
+
+
 def test_rag_chat_returns_agent_reply():
     mock_agent = MagicMock()
     mock_agent.system_instructions = "Keep it concise."

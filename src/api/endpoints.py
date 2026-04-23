@@ -7,7 +7,7 @@ import uuid
 from typing import AsyncGenerator
 
 import inngest.fast_api as _inngest_fast_api
-from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile
+from fastapi import BackgroundTasks, Depends, FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
@@ -32,6 +32,7 @@ from src.sessions import (
 )
 from src.tools.vector_store import VectorStoreManager
 from src.llm.factory import get_llm
+from src import outbox
 from src.rag import (
     RagChatMessage,
     RagValidationError,
@@ -589,6 +590,7 @@ async def session_followup(
 
 @app.post("/api/rag/resources/upload", tags=["RAG"])
 async def rag_upload_resource(
+    background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     current_user: AuthenticatedUser = Depends(get_authenticated_user),
 ):
@@ -596,6 +598,7 @@ async def rag_upload_resource(
         resource, job = await create_resource_and_ingest(file, current_user.user_id)
     except RagValidationError as exc:
         _raise_rag_validation_error(exc)
+    background_tasks.add_task(outbox.dispatch_outbox_events, limit=10)
     return {
         "resource": resource.to_dict(),
         "job": job.to_dict(),

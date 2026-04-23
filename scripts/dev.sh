@@ -36,7 +36,7 @@ echo "Starting backend and UI..."
 
 (
   cd "${ROOT_DIR}"
-  python -m src.main serve --reload
+  INNGEST_DEV=1 python -m src.main serve --reload
 ) &
 BACKEND_PID=$!
 
