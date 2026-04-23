@@ -822,6 +822,65 @@ class SupabaseSessionStore:
             "created_at": row.get("created_at"),
         }
 
+    async def list_rag_chat_sessions(
+        self,
+        *,
+        agent_id: str,
+        owner_id: str,
+    ) -> list[dict[str, Any]]:
+        response = await self._request(
+            "GET",
+            "rag_chat_sessions",
+            params={
+                "select": "id,owner_id,workspace_id,agent_id,created_at",
+                "owner_id": f"eq.{owner_id}",
+                "agent_id": f"eq.{agent_id}",
+                "order": "created_at.desc",
+            },
+        )
+        sessions = response.json()
+        if not sessions:
+            return []
+
+        session_ids = [row["id"] for row in sessions]
+        messages_response = await self._request(
+            "GET",
+            "rag_chat_messages",
+            params={
+                "select": "session_id,content,created_at",
+                "session_id": f"in.({','.join(session_ids)})",
+                "owner_id": f"eq.{owner_id}",
+                "agent_id": f"eq.{agent_id}",
+                "order": "created_at.desc",
+            },
+        )
+        latest_by_session: dict[str, dict[str, Any]] = {}
+        for message in messages_response.json():
+            latest_by_session.setdefault(message["session_id"], message)
+
+        summaries: list[dict[str, Any]] = []
+        for row in sessions:
+            latest = latest_by_session.get(row["id"], {})
+            content = latest.get("content") or ""
+            preview = content[:120] + "..." if len(content) > 120 else content
+            summaries.append(
+                {
+                    "session_id": row["id"],
+                    "owner_id": row["owner_id"],
+                    "workspace_id": row["workspace_id"],
+                    "agent_id": row["agent_id"],
+                    "created_at": row.get("created_at"),
+                    "last_message_at": latest.get("created_at") or row.get("created_at"),
+                    "last_message_preview": preview,
+                }
+            )
+
+        return sorted(
+            summaries,
+            key=lambda summary: summary.get("last_message_at") or summary.get("created_at") or "",
+            reverse=True,
+        )
+
     async def create_rag_chat_message(self, payload: dict[str, Any]) -> None:
         body = {
             "id": payload["message_id"],

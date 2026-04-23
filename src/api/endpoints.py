@@ -41,10 +41,12 @@ from src.rag import (
     create_resource_and_ingest,
     delete_resource as delete_rag_resource_record,
     get_agent_for_chat,
+    get_chat_session as get_rag_chat_session,
     get_resource_status,
     link_resources as link_rag_resources,
     list_agents as list_rag_agents_records,
     list_chat_messages as list_rag_chat_messages,
+    list_chat_sessions as list_rag_chat_sessions,
     list_resources as list_rag_resources_records,
     retrieve_context_for_query,
     update_agent as update_rag_agent_record,
@@ -790,4 +792,43 @@ async def rag_chat_with_agent(
         "agent_id": agent_id,
         "reply": assistant_msg.to_dict(),
         "messages": [m.to_dict() for m in updated_history],
+    }
+
+
+@app.get("/api/rag/agents/{agent_id}/chat/sessions", tags=["RAG"])
+async def list_rag_agent_chat_sessions(
+    agent_id: str,
+    current_user: AuthenticatedUser = Depends(get_authenticated_user),
+):
+    agent_bundle = await get_agent_for_chat(agent_id, current_user.user_id)
+    if agent_bundle is None:
+        raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found.")
+
+    sessions = await list_rag_chat_sessions(agent_id, current_user.user_id)
+    return {"sessions": sessions}
+
+
+@app.get("/api/rag/agents/{agent_id}/chat/sessions/{session_id}/messages", tags=["RAG"])
+async def list_rag_agent_chat_session_messages(
+    agent_id: str,
+    session_id: str,
+    current_user: AuthenticatedUser = Depends(get_authenticated_user),
+):
+    agent_bundle = await get_agent_for_chat(agent_id, current_user.user_id)
+    if agent_bundle is None:
+        raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found.")
+
+    session = await get_rag_chat_session(
+        session_id=session_id,
+        agent_id=agent_id,
+        user_id=current_user.user_id,
+    )
+    if session is None:
+        raise HTTPException(status_code=404, detail=f"Chat session '{session_id}' not found.")
+
+    messages = await list_rag_chat_messages(session_id, current_user.user_id)
+    return {
+        "session_id": session_id,
+        "agent_id": agent_id,
+        "messages": [m.to_dict() for m in messages],
     }

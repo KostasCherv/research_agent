@@ -684,6 +684,23 @@ async def create_or_get_chat_session(*, user_id: str, agent_id: str, session_id:
     return new_session
 
 
+async def list_chat_sessions(agent_id: str, user_id: str) -> list[dict[str, str | None]]:
+    return await _get_store().list_rag_chat_sessions(agent_id=agent_id, owner_id=user_id)
+
+
+async def get_chat_session(
+    *,
+    session_id: str,
+    agent_id: str,
+    user_id: str,
+) -> dict[str, str | None] | None:
+    return await _get_store().get_rag_chat_session(
+        session_id=session_id,
+        owner_id=user_id,
+        agent_id=agent_id,
+    )
+
+
 async def append_chat_message(message: RagChatMessage) -> None:
     await _get_store().create_rag_chat_message(message.to_dict())
 

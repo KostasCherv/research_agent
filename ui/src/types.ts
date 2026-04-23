@@ -103,3 +103,12 @@ export type RagChatMessage = {
   citations: Citation[]
   created_at: string
 }
+
+export type RagChatSessionSummary = {
+  session_id: string
+  agent_id: string
+  owner_id: string
+  created_at: string
+  last_message_at: string | null
+  last_message_preview: string
+}
