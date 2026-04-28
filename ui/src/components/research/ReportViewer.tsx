@@ -1,6 +1,7 @@
 import { useCallback } from 'react'
 import { Download } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 import { Button } from '@/components/ui/button'
 
 type Props = {
@@ -61,9 +62,11 @@ export function ReportViewer({ report, query, isStreaming, error }: Props) {
         </p>
       )}
       {report && (
-        <article className="prose prose-sm dark:prose-invert max-w-none">
-          <ReactMarkdown>{report}</ReactMarkdown>
-        </article>
+        <div className="overflow-x-auto">
+          <article className="prose prose-sm dark:prose-invert max-w-none prose-table:my-2 prose-th:border prose-th:border-border prose-th:px-2 prose-th:py-1 prose-th:text-left prose-td:border prose-td:border-border prose-td:px-2 prose-td:py-1">
+            <ReactMarkdown remarkPlugins={[remarkGfm]}>{report}</ReactMarkdown>
+          </article>
+        </div>
       )}
     </div>
   )
