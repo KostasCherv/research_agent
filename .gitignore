@@ -19,3 +19,5 @@ ui/node_modules
 ui/dist
 .DS_Store
 supabase/.temp
+ui/.impeccable-live.json
+ui/index.html

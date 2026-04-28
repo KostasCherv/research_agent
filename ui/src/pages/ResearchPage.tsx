@@ -2,34 +2,35 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import type { Session } from '@supabase/supabase-js'
 import {
   createSession,
-  deleteSession,
   getSession,
-  listSessions,
   streamSessionResearch,
-  updateSessionTitle,
 } from '@/api/client'
 import { FollowupChat } from '@/components/research/FollowupChat'
-import { QueryForm } from '@/components/research/QueryForm'
+import { InlineProgress } from '@/components/research/InlineProgress'
+import { QueryComposer } from '@/components/research/QueryComposer'
 import { ReportViewer } from '@/components/research/ReportViewer'
-import { ResearchProgress } from '@/components/research/ResearchProgress'
-import { SessionSidebar } from '@/components/research/SessionSidebar'
-import type { ConversationTurn, ResearchStreamEvent, SessionSummary } from '@/types'
+import { ScrollArea } from '@/components/ui/scroll-area'
+import type { ConversationTurn, ResearchStreamEvent } from '@/types'
 
-export function ResearchPage({ authSession }: { authSession: Session | null }) {
+type Props = {
+  authSession: Session | null
+  activeSessionId: string | null
+  onSessionActivated: (id: string | null) => void
+  onSessionsChanged: () => void
+}
+
+export function ResearchPage({ authSession, activeSessionId, onSessionActivated, onSessionsChanged }: Props) {
   const [isStreaming, setIsStreaming] = useState(false)
   const [events, setEvents] = useState<ResearchStreamEvent[]>([])
   const [report, setReport] = useState('')
   const [lastQuery, setLastQuery] = useState('')
   const [error, setError] = useState<string | null>(null)
-
   const [sessionId, setSessionId] = useState<string | null>(null)
   const [runId, setRunId] = useState<string | null>(null)
   const [conversation, setConversation] = useState<ConversationTurn[]>([])
-  const [userSessions, setUserSessions] = useState<SessionSummary[]>([])
 
   const abortRef = useRef<AbortController | null>(null)
-  const sessionsFetchInFlightRef = useRef(false)
-  const sessionsFetchedTokenRef = useRef<string | null>(null)
+  const loadedSessionRef = useRef<string | null>(null)
 
   useEffect(() => {
     return () => {
@@ -37,38 +38,12 @@ export function ResearchPage({ authSession }: { authSession: Session | null }) {
     }
   }, [])
 
-  const loadUserSessions = useCallback(async (accessToken: string, force = false) => {
-    if (sessionsFetchInFlightRef.current) return
-    if (!force && sessionsFetchedTokenRef.current === accessToken) return
-
-    sessionsFetchInFlightRef.current = true
-    try {
-      const { sessions } = await listSessions(accessToken)
-      setUserSessions(sessions)
-      sessionsFetchedTokenRef.current = accessToken
-    } catch (sessionsError) {
-      setUserSessions([])
-      const message = sessionsError instanceof Error ? sessionsError.message : 'Failed to load sessions.'
-      setError(message)
-    } finally {
-      sessionsFetchInFlightRef.current = false
-    }
-  }, [])
-
-  useEffect(() => {
-    if (!authSession?.access_token) return
-    void loadUserSessions(authSession.access_token)
-  }, [authSession?.access_token, loadUserSessions])
-
-  const handleConversationUpdate = useCallback((turn: ConversationTurn) => {
-    setConversation((prev) => [...prev, turn])
-  }, [])
-
   const openSession = useCallback(
     async (selectedSessionId: string) => {
       if (!authSession?.access_token) return
       try {
         const detail = await getSession(selectedSessionId, authSession.access_token)
+        loadedSessionRef.current = detail.session_id
         setSessionId(detail.session_id)
         setRunId(detail.runs.at(-1)?.run_id ?? null)
         setConversation(detail.conversation)
@@ -83,48 +58,27 @@ export function ResearchPage({ authSession }: { authSession: Session | null }) {
     [authSession],
   )
 
-  const handleRenameSession = useCallback(
-    async (targetSessionId: string, nextTitle: string) => {
-      if (!authSession?.access_token) return
-      try {
-        await updateSessionTitle(targetSessionId, nextTitle, authSession.access_token)
-        setUserSessions((prev) =>
-          prev.map((s) => (s.session_id === targetSessionId ? { ...s, title: nextTitle } : s)),
-        )
-        setError(null)
-      } catch (err) {
-        setError(err instanceof Error ? err.message : 'Failed to rename session.')
-        throw err
+  // Respond to session selection from the rail
+  useEffect(() => {
+    if (!activeSessionId) {
+      if (activeSessionId === null && loadedSessionRef.current !== null) {
+        loadedSessionRef.current = null
+        setSessionId(null)
+        setRunId(null)
+        setConversation([])
+        setReport('')
+        setLastQuery('')
+        setEvents([])
       }
-    },
-    [authSession?.access_token],
-  )
+      return
+    }
+    if (activeSessionId === loadedSessionRef.current) return
+    void openSession(activeSessionId)
+  }, [activeSessionId, openSession])
 
-  const handleDeleteSession = useCallback(
-    async (targetSessionId: string) => {
-      if (!authSession?.access_token) return
-      const confirmed = window.confirm('Delete this session? This action cannot be undone.')
-      if (!confirmed) return
-
-      try {
-        await deleteSession(targetSessionId, authSession.access_token)
-        setUserSessions((prev) => prev.filter((session) => session.session_id !== targetSessionId))
-
-        if (sessionId === targetSessionId) {
-          setSessionId(null)
-          setRunId(null)
-          setConversation([])
-          setReport('')
-          setLastQuery('')
-          setEvents([])
-        }
-        setError(null)
-      } catch (err) {
-        setError(err instanceof Error ? err.message : 'Failed to delete session.')
-      }
-    },
-    [authSession?.access_token, sessionId],
-  )
+  const handleConversationUpdate = useCallback((turn: ConversationTurn) => {
+    setConversation((prev) => [...prev, turn])
+  }, [])
 
   const handleSubmit = useCallback(
     async (query: string, useVectorStore: boolean) => {
@@ -154,8 +108,10 @@ export function ResearchPage({ authSession }: { authSession: Session | null }) {
       try {
         const { session_id } = await createSession(authSession.access_token, normalizedQuery)
         currentSessionId = session_id
+        loadedSessionRef.current = session_id
         setSessionId(session_id)
-        await loadUserSessions(authSession.access_token, true)
+        onSessionActivated(session_id)
+        onSessionsChanged()
       } catch (sessionError) {
         setError(sessionError instanceof Error ? sessionError.message : 'Failed to create session.')
         setIsStreaming(false)
@@ -194,52 +150,61 @@ export function ResearchPage({ authSession }: { authSession: Session | null }) {
         }
       }
     },
-    [authSession, loadUserSessions],
+    [authSession, onSessionActivated, onSessionsChanged],
   )
 
+  const hasContent = !!(report || events.length > 0 || isStreaming || error)
+
   return (
-    <div className="flex h-[calc(100vh-3.5rem)]">
-      {authSession && (
-        <SessionSidebar
-          sessions={userSessions}
-          activeSessionId={sessionId}
-          onSelect={(id) => void openSession(id)}
-          onRename={handleRenameSession}
-          onDelete={handleDeleteSession}
-          onNew={() => {
-            setSessionId(null)
-            setReport('')
-            setEvents([])
-            setConversation([])
-          }}
-        />
-      )}
-      <main className="flex-1 overflow-y-auto">
-        <div className="max-w-3xl mx-auto px-4 py-6 space-y-4">
-          {!authSession && (
-            <p className="text-sm text-muted-foreground text-center py-4">
-              Sign in to save and revisit your research sessions.
-            </p>
-          )}
-          <QueryForm
-            onSubmit={handleSubmit}
-            disabled={isStreaming || !authSession}
-            isStreaming={isStreaming}
-          />
-          <ResearchProgress events={events} isStreaming={isStreaming} />
-          <ReportViewer report={report} query={lastQuery} isStreaming={isStreaming} error={error} />
-          {report && sessionId && (
-            <FollowupChat
-              key={sessionId}
-              sessionId={sessionId}
-              runId={runId}
-              accessToken={authSession?.access_token ?? null}
-              conversation={conversation}
-              onConversationUpdate={handleConversationUpdate}
+    <div className="flex h-dvh flex-col max-md:h-full">
+      {!hasContent ? (
+        // Empty state: centered composer
+        <div className="flex flex-1 flex-col items-center justify-center px-6 py-8">
+          <div className="w-full max-w-2xl space-y-2">
+            <p className="text-sm font-medium text-foreground mb-3">Research</p>
+            {!authSession && (
+              <p className="text-sm text-muted-foreground mb-4">
+                Sign in to save and revisit your research sessions.
+              </p>
+            )}
+            <QueryComposer
+              onSubmit={handleSubmit}
+              disabled={isStreaming || !authSession}
+              isStreaming={isStreaming}
             />
-          )}
+          </div>
         </div>
-      </main>
+      ) : (
+        // Active state: scrollable content + pinned composer
+        <ScrollArea className="flex-1 min-h-0">
+          <div className="mx-auto max-w-2xl space-y-6 px-6 py-8 max-md:px-4">
+            <InlineProgress events={events} isStreaming={isStreaming} />
+            <ReportViewer report={report} query={lastQuery} isStreaming={isStreaming} error={error} />
+            {report && sessionId && (
+              <FollowupChat
+                key={sessionId}
+                sessionId={sessionId}
+                runId={runId}
+                accessToken={authSession?.access_token ?? null}
+                conversation={conversation}
+                onConversationUpdate={handleConversationUpdate}
+              />
+            )}
+          </div>
+        </ScrollArea>
+      )}
+
+      {hasContent && (
+        <div className="shrink-0 border-t bg-background px-6 py-4 max-md:px-4">
+          <div className="max-w-2xl mx-auto">
+            <QueryComposer
+              onSubmit={handleSubmit}
+              disabled={isStreaming || !authSession}
+              isStreaming={isStreaming}
+            />
+          </div>
+        </div>
+      )}
     </div>
   )
 }

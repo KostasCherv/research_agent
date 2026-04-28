@@ -1,4 +1,4 @@
-import { Trash2 } from 'lucide-react'
+import { FileText, Trash2 } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import type { RagResource, RagResourceState } from '@/types'
@@ -18,15 +18,21 @@ type Props = {
 export function ResourceTable({ resources, onDelete }: Props) {
   if (resources.length === 0) {
     return (
-      <div className="text-center py-12 text-muted-foreground text-sm">
-        No resources yet. Upload a file to get started.
+      <div className="flex min-h-52 flex-col items-center justify-center rounded-md border border-dashed px-6 text-center">
+        <div className="mb-3 flex size-10 items-center justify-center rounded-full bg-muted text-muted-foreground">
+          <FileText size={18} />
+        </div>
+        <p className="text-sm font-medium text-foreground">No resources yet</p>
+        <p className="mt-1 max-w-sm text-sm text-muted-foreground">
+          Upload a PDF, text file, or Markdown note to make it available to your agents.
+        </p>
       </div>
     )
   }
 
   return (
-    <div className="rounded-md border">
-      <table className="w-full text-sm">
+    <div className="overflow-x-auto rounded-md border">
+      <table className="w-full min-w-[680px] text-sm">
         <thead>
           <tr className="border-b bg-muted/50">
             <th className="text-left px-4 py-2.5 font-medium text-muted-foreground">Name</th>
@@ -55,6 +61,7 @@ export function ResourceTable({ resources, onDelete }: Props) {
                   size="icon"
                   className="size-7 text-muted-foreground hover:text-destructive"
                   onClick={() => void onDelete(r.resource_id)}
+                  aria-label={`Delete ${r.filename}`}
                 >
                   <Trash2 size={14} />
                 </Button>

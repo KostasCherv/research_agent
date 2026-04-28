@@ -22,3 +22,12 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+
+# playwright
+.playwright-mcp
+
+# impeccable
+PRODUCT.md
+
+node-compile-cache

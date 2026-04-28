@@ -3,7 +3,6 @@ import { Plus } from 'lucide-react'
 import type { Session } from '@supabase/supabase-js'
 import { createRagAgent, deleteRagAgent, listRagAgents, listRagResources } from '@/api/client'
 import { AgentCard } from '@/components/agents/AgentCard'
-import { AgentChat } from '@/components/agents/AgentChat'
 import { NewAgentSheet } from '@/components/agents/NewAgentSheet'
 import { Button } from '@/components/ui/button'
 import type { RagAgent, RagResource } from '@/types'
@@ -14,7 +13,6 @@ export function AgentsPage({ authSession }: { authSession: Session | null }) {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [sheetOpen, setSheetOpen] = useState(false)
-  const [chatAgent, setChatAgent] = useState<RagAgent | null>(null)
 
   const readyResources = useMemo(() => resources.filter((r) => r.state === 'ready'), [resources])
 
@@ -67,16 +65,6 @@ export function AgentsPage({ authSession }: { authSession: Session | null }) {
     }
   }
 
-  if (chatAgent && authSession) {
-    return (
-      <AgentChat
-        agent={chatAgent}
-        accessToken={authSession.access_token}
-        onBack={() => setChatAgent(null)}
-      />
-    )
-  }
-
   return (
     <main className="max-w-screen-lg mx-auto px-4 py-6 space-y-4">
       <div className="flex items-center justify-between">
@@ -100,7 +88,7 @@ export function AgentsPage({ authSession }: { authSession: Session | null }) {
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
           {agents.map((a) => (
-            <AgentCard key={a.agent_id} agent={a} onChat={setChatAgent} onDelete={handleDelete} />
+            <AgentCard key={a.agent_id} agent={a} onChat={() => undefined} onDelete={handleDelete} />
           ))}
         </div>
       )}

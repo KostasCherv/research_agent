@@ -1,5 +1,5 @@
 import { useCallback, useState } from 'react'
-import { Upload } from 'lucide-react'
+import { Loader2, Upload } from 'lucide-react'
 import { useDropzone } from 'react-dropzone'
 import { Button } from '@/components/ui/button'
 import {
@@ -57,7 +57,7 @@ export function UploadFileDialog({ open, onOpenChange, onUpload }: Props) {
         <div
           {...getRootProps()}
           className={cn(
-            'border-2 border-dashed rounded-lg p-8 text-center cursor-pointer transition-colors',
+            'cursor-pointer rounded-lg border-2 border-dashed p-8 text-center transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2',
             isDragActive
               ? 'border-primary bg-primary/5'
               : 'border-muted-foreground/25 hover:border-primary/50',
@@ -74,13 +74,18 @@ export function UploadFileDialog({ open, onOpenChange, onUpload }: Props) {
           )}
           <p className="text-xs text-muted-foreground mt-1">PDF, TXT, Markdown</p>
         </div>
-        {error && <p className="text-destructive text-sm">{error}</p>}
+        {error && (
+          <p role="alert" className="rounded-md border border-destructive/25 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+            {error}
+          </p>
+        )}
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={uploading}>
             Cancel
           </Button>
           <Button onClick={() => void handleUpload()} disabled={!file || uploading}>
-            {uploading ? 'Uploading...' : 'Upload'}
+            {uploading && <Loader2 size={14} className="animate-spin" />}
+            {uploading ? 'Uploading' : 'Upload'}
           </Button>
         </DialogFooter>
       </DialogContent>

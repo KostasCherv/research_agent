@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { Upload } from 'lucide-react'
+import { Loader2, Upload } from 'lucide-react'
 import type { Session } from '@supabase/supabase-js'
 import { deleteRagResource, listRagResources, uploadRagResource } from '@/api/client'
 import { ResourceTable } from '@/components/resources/ResourceTable'
@@ -55,7 +55,7 @@ export function ResourcesPage({ authSession }: { authSession: Session | null }) 
   }
 
   return (
-    <main className="max-w-screen-lg mx-auto px-4 py-6 space-y-4">
+    <main className="mx-auto max-w-screen-lg space-y-4 px-4 py-6">
       <div className="flex items-center justify-between">
         <h1 className="text-xl font-semibold">Resources</h1>
         {authSession && (
@@ -65,11 +65,18 @@ export function ResourcesPage({ authSession }: { authSession: Session | null }) 
           </Button>
         )}
       </div>
-      {error && <p className="text-destructive text-sm">{error}</p>}
+      {error && (
+        <p role="alert" className="rounded-md border border-destructive/25 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+          {error}
+        </p>
+      )}
       {!authSession ? (
         <p className="text-muted-foreground text-sm">Sign in to manage your resources.</p>
       ) : loading ? (
-        <p className="text-muted-foreground text-sm">Loading...</p>
+        <div className="flex items-center gap-2 rounded-md border px-3 py-2 text-sm text-muted-foreground">
+          <Loader2 size={14} className="animate-spin" />
+          Loading resources
+        </div>
       ) : (
         <ResourceTable resources={resources} onDelete={handleDelete} />
       )}

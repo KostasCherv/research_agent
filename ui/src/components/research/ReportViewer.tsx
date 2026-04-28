@@ -2,7 +2,6 @@ import { useCallback } from 'react'
 import { Download } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import { Button } from '@/components/ui/button'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 
 type Props = {
   report: string
@@ -38,32 +37,34 @@ export function ReportViewer({ report, query, isStreaming, error }: Props) {
     URL.revokeObjectURL(url)
   }, [query, report])
 
+  if (!report && !error && !isStreaming) return null
+
   return (
-    <Card className="min-h-48">
-      <CardHeader className="pb-3">
+    <div className="space-y-3">
+      {report && (
         <div className="flex items-center justify-between">
-          <CardTitle className="text-base">Report</CardTitle>
-          {report && (
-            <Button variant="outline" size="sm" onClick={download}>
-              <Download size={14} />
-              Download
-            </Button>
-          )}
+          <h2 className="text-sm font-medium text-muted-foreground truncate max-w-[70%]">{query}</h2>
+          <Button variant="ghost" size="sm" className="h-7 gap-1.5 text-xs" onClick={download}>
+            <Download size={12} />
+            Download
+          </Button>
         </div>
-      </CardHeader>
-      <CardContent>
-        {error && <p className="text-destructive text-sm">{error}</p>}
-        {!error && !report && (
-          <p className="text-muted-foreground text-sm">
-            {isStreaming ? 'Generating report...' : 'Submit a query to generate a report.'}
-          </p>
-        )}
-        {report && (
-          <article className="prose prose-sm dark:prose-invert max-w-none">
-            <ReactMarkdown>{report}</ReactMarkdown>
-          </article>
-        )}
-      </CardContent>
-    </Card>
+      )}
+      {error && (
+        <p role="alert" className="rounded-md border border-destructive/25 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+          {error}
+        </p>
+      )}
+      {!error && !report && isStreaming && (
+        <p className="rounded-md border bg-muted/35 px-3 py-2 text-sm text-muted-foreground">
+          Generating report
+        </p>
+      )}
+      {report && (
+        <article className="prose prose-sm dark:prose-invert max-w-none">
+          <ReactMarkdown>{report}</ReactMarkdown>
+        </article>
+      )}
+    </div>
   )
 }
