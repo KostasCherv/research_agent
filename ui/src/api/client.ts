@@ -3,6 +3,7 @@ import type {
   FollowupStreamEvent,
   HealthResponse,
   RagAgent,
+  RagChatStreamEvent,
   RagChatMessage,
   RagChatSessionSummary,
   RagResource,
@@ -518,6 +519,106 @@ export async function chatWithRagAgent(
     throw new Error(`Failed to chat with RAG agent: ${response.status}`)
   }
   return (await response.json()) as { session_id: string; messages: RagChatMessage[] }
+}
+
+type RagAgentChatStreamOptions = {
+  signal?: AbortSignal
+  onSession: (sessionId: string) => void
+  onChunk: (text: string) => void
+  onCitations: (citations: Citation[]) => void
+  onDone: () => void
+  onError?: (error: string) => void
+}
+
+export async function streamRagAgentChat(
+  agentId: string,
+  message: string,
+  sessionId: string | null,
+  accessToken: string | null,
+  options: RagAgentChatStreamOptions,
+): Promise<void> {
+  const response = await fetch(`${API_BASE}/api/rag/agents/${agentId}/chat/stream`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Accept: 'text/event-stream',
+      ...authHeaders(accessToken),
+    },
+    body: JSON.stringify({ message, session_id: sessionId }),
+    signal: options.signal,
+  })
+
+  if (!response.ok) {
+    throw new Error(`Failed to stream RAG agent chat: ${response.status}`)
+  }
+  if (!response.body) {
+    throw new Error('Streaming not supported.')
+  }
+
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder('utf-8')
+  let buffer = ''
+
+  const handleEvent = (parsed: RagChatStreamEvent): boolean => {
+    if (parsed.type === 'session') {
+      options.onSession(parsed.session_id)
+      return false
+    }
+    if (parsed.type === 'chunk') {
+      options.onChunk(parsed.text)
+      return false
+    }
+    if (parsed.type === 'citations') {
+      options.onCitations(parsed.citations)
+      return false
+    }
+    if (parsed.type === 'done') {
+      options.onDone()
+      return true
+    }
+    if (parsed.type === 'error') {
+      options.onError?.(parsed.error)
+      return true
+    }
+    return false
+  }
+
+  while (true) {
+    const { value, done } = await reader.read()
+    if (done) break
+    buffer += decoder.decode(value, { stream: true })
+    const chunks = buffer.split('\n\n')
+    buffer = chunks.pop() ?? ''
+
+    for (const chunk of chunks) {
+      const dataLine = chunk.split('\n').find((l) => l.startsWith('data:'))
+      if (!dataLine) continue
+      let parsed: RagChatStreamEvent
+      try {
+        parsed = JSON.parse(dataLine.replace(/^data:\s?/, '')) as RagChatStreamEvent
+      } catch {
+        continue
+      }
+      if (handleEvent(parsed)) return
+    }
+  }
+
+  if (buffer.trim()) {
+    const dataLine = buffer
+      .split('\n')
+      .map((line) => line.trim())
+      .find((line) => line.startsWith('data:'))
+    if (dataLine) {
+      try {
+        const parsed = JSON.parse(dataLine.replace(/^data:\s?/, '')) as RagChatStreamEvent
+        if (handleEvent(parsed)) return
+      } catch {
+        // Ignore trailing partial event and report abnormal termination below.
+      }
+    }
+  }
+
+  options.onError?.('Chat stream ended before a terminal event was received.')
 }
 
 export async function listRagAgentChatSessions(

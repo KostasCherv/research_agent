@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Loader2, SendHorizontal } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
-import { chatWithRagAgent, getRagAgentChatSessionMessages } from '@/api/client'
+import { getRagAgentChatSessionMessages, streamRagAgentChat } from '@/api/client'
 import { Button } from '@/components/ui/button'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Textarea } from '@/components/ui/textarea'
@@ -29,11 +29,13 @@ export function AgentChat({ agent, accessToken, activeSessionId, onSessionActiva
   const [sessionId, setSessionId] = useState<string | null>(null)
   const [input, setInput] = useState('')
   const [chatting, setChatting] = useState(false)
+  const [streamingText, setStreamingText] = useState('')
   const [error, setError] = useState<string | null>(null)
 
   const messagesRequestRef = useRef(0)
   const loadedSessionRef = useRef<string | null>(null)
   const currentAgentIdRef = useRef(agent.agent_id)
+  const chatAbortRef = useRef<AbortController | null>(null)
   const bottomRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -43,10 +45,13 @@ export function AgentChat({ agent, accessToken, activeSessionId, onSessionActiva
   // Reset when agent changes
   useEffect(() => {
     messagesRequestRef.current += 1
+    chatAbortRef.current?.abort()
+    chatAbortRef.current = null
     loadedSessionRef.current = null
     setSessionId(null)
     setMessages([])
     setInput('')
+    setStreamingText('')
     setError(null)
   }, [agent.agent_id])
 
@@ -90,27 +95,96 @@ export function AgentChat({ agent, accessToken, activeSessionId, onSessionActiva
 
   const send = async () => {
     if (!input.trim() || chatting) return
+    const question = input.trim()
     const requestId = ++messagesRequestRef.current
+    const optimisticUserMessage: RagChatMessage = {
+      message_id: `tmp-user-${requestId}`,
+      session_id: sessionId ?? 'pending',
+      agent_id: agent.agent_id,
+      owner_id: '',
+      role: 'user',
+      content: question,
+      citations: [],
+      created_at: new Date().toISOString(),
+    }
+    setMessages((prev) => [...prev, optimisticUserMessage])
+    setInput('')
+    setStreamingText('')
     setChatting(true)
     setError(null)
+
+    chatAbortRef.current?.abort()
+    const controller = new AbortController()
+    chatAbortRef.current = controller
+
+    let streamedSessionId = sessionId
+    let accumulated = ''
+    let finalCitations: RagChatMessage['citations'] = []
+    let streamFailed = false
     try {
-      const res = await chatWithRagAgent(agent.agent_id, input.trim(), sessionId, accessToken)
-      if (requestId !== messagesRequestRef.current || currentAgentIdRef.current !== agent.agent_id) return
-      loadedSessionRef.current = res.session_id
-      setSessionId(res.session_id)
-      setMessages(res.messages)
-      setInput('')
-      if (!sessionId) {
-        onSessionActivated(res.session_id)
-      }
-      onSessionsChanged()
+      await streamRagAgentChat(agent.agent_id, question, sessionId, accessToken, {
+        signal: controller.signal,
+        onSession: (nextSessionId) => {
+          if (requestId !== messagesRequestRef.current || currentAgentIdRef.current !== agent.agent_id) return
+          streamedSessionId = nextSessionId
+          loadedSessionRef.current = nextSessionId
+          setSessionId(nextSessionId)
+          if (!sessionId) {
+            onSessionActivated(nextSessionId)
+          }
+        },
+        onChunk: (textChunk) => {
+          if (requestId !== messagesRequestRef.current || currentAgentIdRef.current !== agent.agent_id) return
+          if (controller.signal.aborted) return
+          accumulated += textChunk
+          setStreamingText((prev) => prev + textChunk)
+        },
+        onCitations: (citations) => {
+          if (requestId !== messagesRequestRef.current || currentAgentIdRef.current !== agent.agent_id) return
+          if (controller.signal.aborted) return
+          finalCitations = citations
+        },
+        onDone: () => {
+          if (requestId !== messagesRequestRef.current || currentAgentIdRef.current !== agent.agent_id) return
+          const finalSessionId = streamedSessionId ?? sessionId ?? 'pending'
+          const assistantMessage: RagChatMessage = {
+            message_id: `tmp-assistant-${requestId}`,
+            session_id: finalSessionId,
+            agent_id: agent.agent_id,
+            owner_id: '',
+            role: 'assistant',
+            content: accumulated.trim(),
+            citations: finalCitations,
+            created_at: new Date().toISOString(),
+          }
+          loadedSessionRef.current = finalSessionId
+          setSessionId(finalSessionId)
+          setMessages((prev) => [...prev, assistantMessage])
+          setStreamingText('')
+          onSessionsChanged()
+        },
+        onError: (streamError) => {
+          streamFailed = true
+          if (requestId !== messagesRequestRef.current || currentAgentIdRef.current !== agent.agent_id) return
+          setError(streamError)
+          setStreamingText('')
+        },
+      })
     } catch (err) {
+      if (controller.signal.aborted) return
       if (requestId === messagesRequestRef.current && currentAgentIdRef.current === agent.agent_id) {
         setError(err instanceof Error ? err.message : 'Chat failed.')
+        setStreamingText('')
       }
     } finally {
+      if (chatAbortRef.current === controller) {
+        chatAbortRef.current = null
+      }
       if (requestId === messagesRequestRef.current && currentAgentIdRef.current === agent.agent_id) {
         setChatting(false)
+        if (streamFailed) {
+          onSessionsChanged()
+        }
       }
     }
   }
@@ -153,6 +227,16 @@ export function AgentChat({ agent, accessToken, activeSessionId, onSessionActiva
                 </div>
               </div>
             ),
+          )}
+          {chatting && (
+            <div className="flex gap-2 items-start">
+              <div className="mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-full bg-muted text-[10px] font-bold">
+                AI
+              </div>
+              <div className="max-w-[75%] rounded-2xl rounded-bl-sm bg-muted px-3 py-2 text-sm max-md:max-w-[86%]">
+                <MarkdownMessage content={streamingText || 'Thinking...'} />
+              </div>
+            </div>
           )}
           <div ref={bottomRef} />
         </div>

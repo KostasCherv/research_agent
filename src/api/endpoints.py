@@ -798,6 +798,111 @@ async def rag_chat_with_agent(
     }
 
 
+@app.post("/api/rag/agents/{agent_id}/chat/stream", tags=["RAG"])
+async def rag_chat_with_agent_stream(
+    agent_id: str,
+    body: RagChatRequest,
+    current_user: AuthenticatedUser = Depends(get_authenticated_user),
+):
+    normalized_message = body.message.strip()
+    if not normalized_message:
+        raise HTTPException(status_code=400, detail="Message cannot be empty.")
+
+    agent_bundle = await get_agent_for_chat(agent_id, current_user.user_id)
+    if agent_bundle is None:
+        raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found.")
+    agent, resource_ids = agent_bundle
+    if not resource_ids:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "processing_failed", "message": "Agent has no linked ready resources."},
+        )
+
+    rag_context = await retrieve_context_for_query(
+        agent_id=agent_id,
+        user_id=current_user.user_id,
+        resource_ids=resource_ids,
+        question=normalized_message,
+    )
+
+    chat_session_id = await create_or_get_chat_session(
+        user_id=current_user.user_id,
+        agent_id=agent_id,
+        session_id=body.session_id,
+    )
+    history = await list_rag_chat_messages(chat_session_id, current_user.user_id)
+    history_block = "\n".join(f"{m.role.upper()}: {m.content}" for m in history[-10:])
+    prompt = (
+        "You are a custom RAG assistant.\n\n"
+        f"System instructions:\n{agent.system_instructions or 'None'}\n\n"
+        f"Conversation history:\n{history_block or 'None'}\n\n"
+        f"Retrieved context:\n{rag_context.context or 'No context returned.'}\n\n"
+        f"User question:\n{normalized_message}\n\n"
+        "Answer clearly and stay grounded in the retrieved context."
+    )
+
+    citations = [
+        {
+            "source_title": chunk.get("source_title") or "resource",
+            "source_url": chunk.get("source_url") or "",
+        }
+        for chunk in rag_context.chunks
+    ]
+
+    async def _stream_chat() -> AsyncGenerator[str, None]:
+        llm = get_llm(temperature=0.2)
+        answer_parts: list[str] = []
+        try:
+            yield f"data: {json.dumps({'type': 'session', 'session_id': chat_session_id})}\n\n"
+            async for chunk in llm.astream(prompt):
+                content = chunk.content if hasattr(chunk, "content") else chunk
+                token = ""
+                if isinstance(content, str):
+                    token = content
+                elif isinstance(content, list):
+                    token = "".join(
+                        part if isinstance(part, str) else part.get("text", "")
+                        for part in content
+                    )
+                elif content is not None:
+                    token = str(content)
+
+                if token:
+                    answer_parts.append(token)
+                    yield f"data: {json.dumps({'type': 'chunk', 'text': token})}\n\n"
+
+            answer = "".join(answer_parts).strip()
+            user_msg = RagChatMessage(
+                message_id=str(uuid.uuid4()),
+                session_id=chat_session_id,
+                agent_id=agent_id,
+                owner_id=current_user.user_id,
+                role="user",
+                content=normalized_message,
+            )
+            assistant_msg = RagChatMessage(
+                message_id=str(uuid.uuid4()),
+                session_id=chat_session_id,
+                agent_id=agent_id,
+                owner_id=current_user.user_id,
+                role="assistant",
+                content=answer,
+                citations=citations,
+            )
+            await append_chat_message(user_msg)
+            await append_chat_message(assistant_msg)
+            yield f"data: {json.dumps({'type': 'citations', 'citations': citations})}\n\n"
+            yield f"data: {json.dumps({'type': 'done'})}\n\n"
+        except Exception as exc:
+            yield f"data: {json.dumps({'type': 'error', 'error': str(exc)})}\n\n"
+
+    return StreamingResponse(
+        _stream_chat(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
 @app.get("/api/rag/agents/{agent_id}/chat/sessions", tags=["RAG"])
 async def list_rag_agent_chat_sessions(
     agent_id: str,

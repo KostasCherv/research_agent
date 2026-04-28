@@ -112,3 +112,10 @@ export type RagChatSessionSummary = {
   last_message_at: string | null
   last_message_preview: string
 }
+
+export type RagChatStreamEvent =
+  | { type: 'session'; session_id: string }
+  | { type: 'chunk'; text: string }
+  | { type: 'citations'; citations: Citation[] }
+  | { type: 'done' }
+  | { type: 'error'; error: string }
