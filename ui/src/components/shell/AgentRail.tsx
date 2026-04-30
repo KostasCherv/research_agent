@@ -1,15 +1,24 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Bot, FolderOpen, Loader2, LogOut, Moon, MoreHorizontal, Pencil, Plus, Sun, Telescope, Trash2 } from 'lucide-react'
 import type { Session } from '@supabase/supabase-js'
-import { deleteRagAgent, listRagAgentChatSessions, listSessions } from '@/api/client'
+import { deleteRagAgent, deleteSession, listRagAgentChatSessions, listSessions, updateSessionTitle } from '@/api/client'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import { Button } from '@/components/ui/button'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
+import { Input } from '@/components/ui/input'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { useTheme } from '@/hooks/useTheme'
 import { cn } from '@/lib/utils'
@@ -24,7 +33,7 @@ type Props = {
   activeSessionId: string | null
   sessionRefreshToken: number
   onViewChange: (view: ActiveView) => void
-  onSessionSelect: (id: string) => void
+  onSessionSelect: (id: string | null) => void
   onSignIn: () => void
   onSignOut: () => void
   onEditAgent: (agent: RagAgent) => void
@@ -45,10 +54,22 @@ function ResearchSessionList({
   accessToken: string
   activeSessionId: string | null
   refreshToken: number
-  onSelect: (id: string) => void
+  onSelect: (id: string | null) => void
 }) {
   const [sessions, setSessions] = useState<ResearchSession[] | null>(null)
   const fetchedTokenRef = useRef(-1)
+  const [contextMenu, setContextMenu] = useState<{
+    id: string
+    title: string
+    x: number
+    y: number
+  } | null>(null)
+  const [renameTarget, setRenameTarget] = useState<{ id: string; title: string } | null>(null)
+  const [renameValue, setRenameValue] = useState('')
+  const [renamePending, setRenamePending] = useState(false)
+  const [renameError, setRenameError] = useState<string | null>(null)
+  const [deleteTarget, setDeleteTarget] = useState<{ id: string; title: string } | null>(null)
+  const [deletePending, setDeletePending] = useState(false)
 
   useEffect(() => {
     if (fetchedTokenRef.current === refreshToken) return
@@ -57,6 +78,19 @@ function ResearchSessionList({
       .then(({ sessions: data }) => setSessions(data))
       .catch(() => setSessions([]))
   }, [accessToken, refreshToken])
+
+  useEffect(() => {
+    if (!contextMenu) return
+    const closeMenu = () => setContextMenu(null)
+    window.addEventListener('click', closeMenu)
+    window.addEventListener('scroll', closeMenu, true)
+    window.addEventListener('resize', closeMenu)
+    return () => {
+      window.removeEventListener('click', closeMenu)
+      window.removeEventListener('scroll', closeMenu, true)
+      window.removeEventListener('resize', closeMenu)
+    }
+  }, [contextMenu])
 
   if (sessions === null) {
     return (
@@ -74,6 +108,16 @@ function ResearchSessionList({
           key={s.session_id}
           type="button"
           onClick={() => onSelect(s.session_id)}
+          onContextMenu={(e) => {
+            e.preventDefault()
+            e.stopPropagation()
+            setContextMenu({
+              id: s.session_id,
+              title: s.title || 'Untitled session',
+              x: e.clientX,
+              y: e.clientY,
+            })
+          }}
           className={cn(
             'w-full truncate rounded px-2 py-1 text-left text-xs transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-secondary',
             activeSessionId === s.session_id
@@ -86,6 +130,151 @@ function ResearchSessionList({
           {s.title || 'Untitled session'}
         </button>
       ))}
+      {contextMenu && (
+        <div
+          className="fixed z-50 min-w-32 rounded-md border bg-popover p-1 text-popover-foreground shadow-md"
+          style={{ left: contextMenu.x, top: contextMenu.y }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <button
+            type="button"
+            className="w-full rounded-sm px-2 py-1.5 text-left text-sm hover:bg-accent hover:text-accent-foreground"
+            onClick={() => {
+              setRenameTarget({ id: contextMenu.id, title: contextMenu.title })
+              setRenameValue(contextMenu.title)
+              setRenameError(null)
+              setContextMenu(null)
+            }}
+          >
+            Edit
+          </button>
+          <button
+            type="button"
+            className="w-full rounded-sm px-2 py-1.5 text-left text-sm text-destructive hover:bg-accent"
+            onClick={() => {
+              setDeleteTarget({ id: contextMenu.id, title: contextMenu.title })
+              setContextMenu(null)
+            }}
+          >
+            Delete
+          </button>
+        </div>
+      )}
+      <Dialog
+        open={!!renameTarget}
+        onOpenChange={(open: boolean) => {
+          if (!open && !renamePending) {
+            setRenameTarget(null)
+            setRenameError(null)
+          }
+        }}
+      >
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Edit Discussion Title</DialogTitle>
+            <DialogDescription>Choose a clearer name for this research discussion.</DialogDescription>
+          </DialogHeader>
+          <Input
+            value={renameValue}
+            onChange={(e) => setRenameValue(e.target.value)}
+            maxLength={120}
+            autoFocus
+            onKeyDown={(e) => {
+              if (e.key !== 'Enter' || renamePending || !renameTarget || !renameValue.trim()) return
+              setRenamePending(true)
+              setRenameError(null)
+              void updateSessionTitle(renameTarget.id, renameValue.trim(), accessToken)
+                .then(() => {
+                  const title = renameValue.trim()
+                  setSessions((prev) =>
+                    prev?.map((session) =>
+                      session.session_id === renameTarget.id ? { ...session, title } : session,
+                    ) ?? prev,
+                  )
+                  setRenameTarget(null)
+                })
+                .catch((error) => {
+                  setRenameError(error instanceof Error ? error.message : 'Failed to rename discussion.')
+                })
+                .finally(() => setRenamePending(false))
+            }}
+          />
+          {renameError && <p className="text-sm text-destructive">{renameError}</p>}
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => {
+                setRenameTarget(null)
+                setRenameError(null)
+              }}
+              disabled={renamePending}
+            >
+              Cancel
+            </Button>
+            <Button
+              disabled={renamePending || !renameTarget || !renameValue.trim()}
+              onClick={() => {
+                if (!renameTarget || !renameValue.trim()) return
+                setRenamePending(true)
+                setRenameError(null)
+                void updateSessionTitle(renameTarget.id, renameValue.trim(), accessToken)
+                  .then(() => {
+                    const title = renameValue.trim()
+                    setSessions((prev) =>
+                      prev?.map((session) =>
+                        session.session_id === renameTarget.id ? { ...session, title } : session,
+                      ) ?? prev,
+                    )
+                    setRenameTarget(null)
+                  })
+                  .catch((error) => {
+                    setRenameError(error instanceof Error ? error.message : 'Failed to rename discussion.')
+                  })
+                  .finally(() => setRenamePending(false))
+              }}
+            >
+              {renamePending ? 'Saving...' : 'Save'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+      <Dialog
+        open={!!deleteTarget}
+        onOpenChange={(open: boolean) => {
+          if (!open && !deletePending) setDeleteTarget(null)
+        }}
+      >
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Delete Discussion</DialogTitle>
+            <DialogDescription>
+              This will permanently delete "{deleteTarget?.title ?? 'this discussion'}".
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDeleteTarget(null)} disabled={deletePending}>
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              disabled={deletePending || !deleteTarget}
+              onClick={() => {
+                if (!deleteTarget) return
+                setDeletePending(true)
+                void deleteSession(deleteTarget.id, accessToken)
+                  .then(() => {
+                    setSessions((prev) => prev?.filter((session) => session.session_id !== deleteTarget.id) ?? prev)
+                    if (activeSessionId === deleteTarget.id) onSelect(null)
+                    setDeleteTarget(null)
+                  })
+                  .finally(() => setDeletePending(false))
+              }}
+            >
+              {deletePending ? 'Deleting...' : 'Delete'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </>
   )
 }
