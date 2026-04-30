@@ -30,3 +30,14 @@ async def handle_rag_ingestion(ctx: inngest.Context) -> dict:
 
     await _run_ingestion_job(job_id)
     return {"done": True, "job_id": job_id}
+
+
+@inngest_client.create_function(
+    fn_id="research-run",
+    trigger=inngest.TriggerEvent(event="research/run.requested"),
+)
+async def handle_research_run(ctx: inngest.Context) -> dict:
+    from src.api.endpoints import _execute_research_run
+
+    await _execute_research_run(**ctx.event.data)
+    return {"done": True, "run_id": ctx.event.data.get("run_id")}

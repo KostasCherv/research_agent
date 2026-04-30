@@ -241,60 +241,24 @@ export async function streamFollowup(
   options.onError?.('Follow-up stream ended before a terminal event was received.')
 }
 
-export async function streamSessionResearch(
+export async function startSessionResearch(
   sessionId: string,
   payload: ResearchRequest,
   accessToken: string | null,
-  options: StreamOptions,
-): Promise<{ runId: string | null }> {
+): Promise<{ run_id: string; status: string }> {
   const response = await fetch(`${API_BASE}/sessions/${sessionId}/research`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      Accept: 'text/event-stream',
       ...authHeaders(accessToken),
     },
     body: JSON.stringify(payload),
-    signal: options.signal,
   })
 
   if (!response.ok) {
     throw new Error(`Session research failed: ${response.status}`)
   }
-  if (!response.body) {
-    throw new Error('Streaming not supported.')
-  }
-
-  const runId = response.headers.get('X-Run-Id')
-
-  const reader = response.body.getReader()
-  const decoder = new TextDecoder('utf-8')
-  let buffer = ''
-
-  while (true) {
-    const { value, done } = await reader.read()
-    if (done) break
-    buffer += decoder.decode(value, { stream: true })
-    const chunks = buffer.split('\n\n')
-    buffer = chunks.pop() ?? ''
-
-    for (const chunk of chunks) {
-      const event = parseEventBlock(chunk)
-      if (!event) continue
-      options.onEvent(event)
-      if (event.node === '__end__') {
-        options.onDone?.()
-        return { runId }
-      }
-    }
-  }
-
-  if (buffer.trim()) {
-    const event = parseEventBlock(buffer)
-    if (event) options.onEvent(event)
-  }
-  options.onDone?.()
-  return { runId }
+  return (await response.json()) as { run_id: string; status: string }
 }
 
 export async function streamResearch(

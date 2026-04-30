@@ -79,13 +79,29 @@ function ResearchSessionList({
   const [deleteTarget, setDeleteTarget] = useState<{ id: string; title: string } | null>(null)
   const [deletePending, setDeletePending] = useState(false)
 
-  useEffect(() => {
-    if (fetchedTokenRef.current === refreshToken) return
-    fetchedTokenRef.current = refreshToken
+  const fetchSessions = useCallback(() => {
     void listSessions(accessToken)
       .then(({ sessions: data }) => setSessions(data))
       .catch(() => setSessions([]))
-  }, [accessToken, refreshToken])
+  }, [accessToken])
+
+  useEffect(() => {
+    if (fetchedTokenRef.current === refreshToken) return
+    fetchedTokenRef.current = refreshToken
+    fetchSessions()
+  }, [fetchSessions, refreshToken])
+
+  useEffect(() => {
+    if (!sessions || sessions.length === 0) return
+    const hasRunning = sessions.some((session) => session.latest_run_status === 'running')
+    if (!hasRunning) return
+    const intervalId = window.setInterval(() => {
+      fetchSessions()
+    }, 5000)
+    return () => {
+      window.clearInterval(intervalId)
+    }
+  }, [fetchSessions, sessions])
 
   useEffect(() => {
     if (!contextMenu) return
@@ -135,7 +151,15 @@ function ResearchSessionList({
           aria-current={activeSessionId === s.session_id ? 'page' : undefined}
           title={s.title || 'Untitled session'}
         >
-          {s.title || 'Untitled session'}
+          <span className="inline-flex min-w-0 items-center gap-1.5">
+            {s.latest_run_status === 'running' && (
+              <span className="size-1.5 rounded-full bg-primary animate-pulse" aria-label="Running" />
+            )}
+            {s.latest_run_status === 'failed' && (
+              <span className="size-1.5 rounded-full bg-destructive" aria-label="Failed" />
+            )}
+            <span className="truncate">{s.title || 'Untitled session'}</span>
+          </span>
         </button>
       ))}
       {contextMenu && (

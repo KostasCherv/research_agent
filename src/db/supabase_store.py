@@ -84,11 +84,30 @@ class SupabaseSessionStore:
             },
         )
         rows = response.json()
+        if not rows:
+            return []
+
+        session_ids = [row["id"] for row in rows]
+        runs_resp = await self._request(
+            "GET",
+            "session_runs",
+            params={
+                "select": "session_id,status,created_at",
+                "session_id": f"in.({','.join(session_ids)})",
+                "user_id": f"eq.{user_id}",
+                "order": "created_at.desc",
+            },
+        )
+        latest_status_by_session: dict[str, str] = {}
+        for run_row in runs_resp.json():
+            latest_status_by_session.setdefault(run_row["session_id"], run_row.get("status", "completed"))
+
         return [
             {
                 "session_id": row["id"],
                 "title": row.get("title") or "New session",
                 "created_at": row.get("created_at", ""),
+                "latest_run_status": latest_status_by_session.get(row["id"]),
             }
             for row in rows
         ]
@@ -114,7 +133,7 @@ class SupabaseSessionStore:
             "GET",
             "session_runs",
             params={
-                "select": "id,query,source_urls,report,created_at",
+                "select": "id,query,source_urls,report,status,error_details,created_at",
                 "session_id": f"eq.{session_id}",
                 "user_id": f"eq.{user_id}",
                 "order": "created_at.asc",
@@ -127,6 +146,8 @@ class SupabaseSessionStore:
                 query=row.get("query", ""),
                 source_urls=row.get("source_urls") or [],
                 report=row.get("report", ""),
+                status=row.get("status", "completed"),
+                error_details=row.get("error_details"),
                 created_at=row.get("created_at", ""),
             )
             for row in run_rows
@@ -216,9 +237,54 @@ class SupabaseSessionStore:
             "query": run.query,
             "source_urls": run.source_urls,
             "report": run.report,
+            "status": run.status,
+            "error_details": run.error_details,
             "created_at": run.created_at,
         }
         await self._request("POST", "session_runs", json_body=payload)
+
+    async def create_session_run(
+        self,
+        *,
+        user_id: str,
+        session_id: str,
+        run: SessionRun,
+    ) -> None:
+        payload = {
+            "id": run.run_id,
+            "session_id": session_id,
+            "user_id": user_id,
+            "query": run.query,
+            "source_urls": run.source_urls,
+            "report": run.report,
+            "status": run.status,
+            "error_details": run.error_details,
+            "created_at": run.created_at,
+        }
+        await self._request("POST", "session_runs", json_body=payload)
+
+    async def update_session_run(
+        self,
+        *,
+        run_id: str,
+        user_id: str,
+        session_id: str,
+        patch: dict[str, Any],
+    ) -> bool:
+        update_body = dict(patch)
+        response = await self._request(
+            "PATCH",
+            "session_runs",
+            params={
+                "id": f"eq.{run_id}",
+                "user_id": f"eq.{user_id}",
+                "session_id": f"eq.{session_id}",
+            },
+            json_body=update_body,
+            extra_headers={"Prefer": "return=representation"},
+        )
+        rows = response.json()
+        return bool(rows)
 
     async def append_turn(
         self,

@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+from contextlib import contextmanager
 from unittest.mock import AsyncMock, MagicMock, patch
 from fastapi.testclient import TestClient
 
@@ -157,11 +158,7 @@ def test_followup_returns_404_for_unknown_run_id():
         assert response.status_code == 404
 
 
-def test_session_research_streams_events_and_records_run():
-    search_result = [{"url": "https://example.com", "title": "Example", "content": "Test"}]
-    mock_llm = MagicMock()
-    mock_llm.invoke.return_value = MagicMock(content="LLM output text.")
-
+def test_session_research_queues_background_run():
     mock_session = Session(
         session_id="session-1",
         runs=[SessionRun(run_id="old", query="q", source_urls=[], report="", created_at="2026")],
@@ -169,14 +166,14 @@ def test_session_research_streams_events_and_records_run():
         created_at="2026",
     )
 
+    mock_create_session_run = AsyncMock(return_value=None)
+    mock_enqueue_event = AsyncMock(return_value=None)
+
     with (
-        patch("src.graph.nodes.perform_search", return_value=search_result),
-        patch("src.graph.nodes.asyncio.run", side_effect=_mock_asyncio_run),
-        patch("src.graph.nodes.get_llm", return_value=mock_llm),
-        patch("src.graph.nodes.VectorStoreManager"),
-        patch("src.api.endpoints.VectorStoreManager"),
         patch("src.api.endpoints.get_session", new=AsyncMock(return_value=mock_session)),
-        patch("src.api.endpoints.append_run", new=AsyncMock(return_value=None)),
+        patch("src.api.endpoints.create_session_run", new=mock_create_session_run),
+        patch("src.api.endpoints.outbox.enqueue_event", new=mock_enqueue_event),
+        patch("src.api.endpoints.outbox.dispatch_outbox_events", new=AsyncMock(return_value=1)),
     ):
         response = client.post(
             "/sessions/session-1/research",
@@ -184,18 +181,128 @@ def test_session_research_streams_events_and_records_run():
         )
 
     assert response.status_code == 200
-    assert "text/event-stream" in response.headers["content-type"]
-    assert response.headers.get("X-Run-Id")
+    payload = response.json()
+    assert payload["status"] == "running"
+    assert payload["run_id"]
+    assert mock_create_session_run.await_count == 1
+    assert mock_enqueue_event.await_count == 1
 
-    events = [
-        json.loads(line[6:])
-        for line in response.text.splitlines()
-        if line.startswith("data: ")
-    ]
-    node_names = [e["node"] for e in events]
-    assert "__end__" in node_names
 
-    assert response.headers.get("X-Run-Id")
+def test_execute_research_run_marks_completed_and_records():
+    from src.api.endpoints import _execute_research_run
+
+    class FakeGraph:
+        async def astream(self, _initial_state):
+            yield {
+                "report_node": {
+                    "report": "Final report",
+                    "retrieved_contents": [{"url": "https://example.com", "title": "Example", "content": "Chunk"}],
+                    "summaries": [],
+                }
+            }
+
+    @contextmanager
+    def _mock_trace_ctx(**_kwargs):
+        yield MagicMock(workflow_id="wf-1")
+
+    session = Session(session_id="session-1", runs=[], conversation=[], created_at="2026")
+    mock_update = AsyncMock(return_value=True)
+    mock_manager = MagicMock()
+
+    with (
+        patch("src.api.endpoints.get_session", new=AsyncMock(return_value=session)),
+        patch("src.api.endpoints.build_graph", return_value=FakeGraph()),
+        patch("src.api.endpoints.update_session_run", new=mock_update),
+        patch("src.api.endpoints.VectorStoreManager", return_value=mock_manager),
+        patch("src.api.endpoints.start_workflow_run", side_effect=_mock_trace_ctx),
+        patch("src.api.endpoints.end_workflow_run"),
+    ):
+        asyncio.run(
+            _execute_research_run(
+                session_id="session-1",
+                run_id="run-1",
+                user_id="user-1",
+                query="What is LangGraph?",
+                use_vector_store=False,
+            )
+        )
+
+    mock_update.assert_awaited_once_with(
+        run_id="run-1",
+        user_id="user-1",
+        session_id="session-1",
+        patch={
+            "query": "What is LangGraph?",
+            "source_urls": ["https://example.com"],
+            "report": "Final report",
+            "status": "completed",
+            "error_details": None,
+        },
+    )
+    mock_manager.save_source_chunks.assert_called_once()
+
+
+def test_execute_research_run_marks_failed_on_error():
+    from src.api.endpoints import _execute_research_run
+
+    class FailingGraph:
+        async def astream(self, _initial_state):
+            raise RuntimeError("graph failure")
+            yield  # pragma: no cover
+
+    @contextmanager
+    def _mock_trace_ctx(**_kwargs):
+        yield MagicMock(workflow_id="wf-1")
+
+    session = Session(session_id="session-1", runs=[], conversation=[], created_at="2026")
+    mock_update = AsyncMock(return_value=True)
+
+    with (
+        patch("src.api.endpoints.get_session", new=AsyncMock(return_value=session)),
+        patch("src.api.endpoints.build_graph", return_value=FailingGraph()),
+        patch("src.api.endpoints.update_session_run", new=mock_update),
+        patch("src.api.endpoints.start_workflow_run", side_effect=_mock_trace_ctx),
+        patch("src.api.endpoints.end_workflow_run"),
+    ):
+        try:
+            asyncio.run(
+                _execute_research_run(
+                    session_id="session-1",
+                    run_id="run-1",
+                    user_id="user-1",
+                    query="What is LangGraph?",
+                    use_vector_store=False,
+                )
+            )
+        except RuntimeError:
+            pass
+
+    mock_update.assert_awaited_once_with(
+        run_id="run-1",
+        user_id="user-1",
+        session_id="session-1",
+        patch={"status": "failed", "error_details": "graph failure"},
+    )
+
+
+def test_record_session_run_raises_when_finalize_update_fails():
+    from src.api.endpoints import _record_session_run
+
+    session = Session(session_id="session-1", runs=[], conversation=[], created_at="2026")
+    with patch("src.api.endpoints.update_session_run", new=AsyncMock(return_value=False)):
+        try:
+            asyncio.run(
+                _record_session_run(
+                    session=session,
+                    user_id="user-1",
+                    run_id="run-1",
+                    query="What is LangGraph?",
+                    final_state={"report": "Final report", "retrieved_contents": [], "summaries": []},
+                )
+            )
+            assert False, "Expected RuntimeError when run finalization update fails"
+        except RuntimeError as exc:
+            assert "Could not finalize run 'run-1'" in str(exc)
 
 
 def test_session_endpoints_require_auth():

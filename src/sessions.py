@@ -14,6 +14,8 @@ class SessionRun:
     query: str
     source_urls: list[str] = field(default_factory=list)
     report: str = ""
+    status: str = "completed"
+    error_details: str | None = None
     created_at: str = field(default_factory=lambda: datetime.now(UTC).isoformat())
 
     def to_dict(self) -> dict:
@@ -22,6 +24,8 @@ class SessionRun:
             "query": self.query,
             "source_urls": self.source_urls,
             "report": self.report,
+            "status": self.status,
+            "error_details": self.error_details,
             "created_at": self.created_at,
         }
 
@@ -118,6 +122,27 @@ async def get_session(session_id: str, user_id: str) -> Session | None:
 async def append_run(user_id: str, session_id: str, run: SessionRun) -> None:
     """Persist a completed run for a given session and user."""
     await _get_store().append_run(user_id=user_id, session_id=session_id, run=run)
+
+
+async def create_session_run(user_id: str, session_id: str, run: SessionRun) -> None:
+    """Persist a new run in running/pending state."""
+    await _get_store().create_session_run(user_id=user_id, session_id=session_id, run=run)
+
+
+async def update_session_run(
+    *,
+    run_id: str,
+    user_id: str,
+    session_id: str,
+    patch: dict,
+) -> bool:
+    """Patch status or metadata for an existing run."""
+    return await _get_store().update_session_run(
+        run_id=run_id,
+        user_id=user_id,
+        session_id=session_id,
+        patch=patch,
+    )
 
 
 async def append_turn(user_id: str, session_id: str, turn: ConversationTurn) -> None:

@@ -27,6 +27,8 @@ export type SessionRun = {
   query: string
   source_urls: string[]
   report: string
+  status: 'running' | 'completed' | 'failed'
+  error_details?: string | null
   created_at: string
 }
 
@@ -56,6 +58,7 @@ export type SessionSummary = {
   session_id: string
   title: string
   created_at: string
+  latest_run_status?: 'running' | 'completed' | 'failed' | null
 }
 
 export type FollowupStreamEvent =

@@ -19,14 +19,16 @@ from src.config import settings
 from src.auth import AuthenticatedUser, get_authenticated_user
 from src.sessions import (
     Session,
+    SessionRun,
     ConversationTurn,
-    append_run,
     append_turn,
+    create_session_run,
     create_session,
     generate_run_id,
     get_session,
     list_sessions,
     delete_session,
+    update_session_run,
     update_session_title,
     ensure_store_initialized,
 )
@@ -54,7 +56,7 @@ from src.rag import (
     update_chat_session_title as update_rag_chat_session_title,
     update_agent as update_rag_agent_record,
 )
-from src.inngest_client import handle_rag_ingestion, inngest_client
+from src.inngest_client import handle_rag_ingestion, handle_research_run, inngest_client
 from src.storage import ensure_rag_storage_ready
 
 logger = logging.getLogger(__name__)
@@ -73,7 +75,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-_inngest_fast_api.serve(app, inngest_client, [handle_rag_ingestion])
+_inngest_fast_api.serve(app, inngest_client, [handle_rag_ingestion, handle_research_run])
 
 
 @app.on_event("startup")
@@ -258,21 +260,28 @@ async def _record_session_run(
     query: str,
     final_state: dict,
 ) -> None:
-    """Persist run metadata and source chunks to the session store."""
-    from src.sessions import SessionRun
+    """Finalize an existing run with metadata and source chunks."""
 
     retrieved = final_state.get("retrieved_contents") or []
     summaries = final_state.get("summaries") or []
     source_urls = [s.get("url", "") for s in retrieved if s.get("url")]
 
-    run = SessionRun(
+    finalized = await update_session_run(
         run_id=run_id,
-        query=query,
-        source_urls=source_urls,
-        report=final_state.get("report", ""),
+        user_id=user_id,
+        session_id=session.session_id,
+        patch={
+            "query": query,
+            "source_urls": source_urls,
+            "report": final_state.get("report", ""),
+            "status": "completed",
+            "error_details": None,
+        },
     )
-    session.runs.append(run)
-    await append_run(user_id=user_id, session_id=session.session_id, run=run)
+    if not finalized:
+        raise RuntimeError(
+            f"Could not finalize run '{run_id}' for session '{session.session_id}'."
+        )
 
     # Persist source chunks for follow-up retrieval
     sources_to_chunk = retrieved if retrieved else summaries
@@ -286,6 +295,75 @@ async def _record_session_run(
             )
         except Exception as exc:
             logger.warning("[session] could not save source chunks: %s", exc)
+
+
+async def _execute_research_run(
+    session_id: str,
+    run_id: str,
+    user_id: str,
+    query: str,
+    use_vector_store: bool,
+) -> None:
+    """Execute one research run in the background and persist terminal status."""
+    session = await get_session(session_id, user_id)
+    if session is None:
+        await update_session_run(
+            run_id=run_id,
+            user_id=user_id,
+            session_id=session_id,
+            patch={
+                "status": "failed",
+                "error_details": f"Session '{session_id}' not found.",
+            },
+        )
+        return
+
+    graph = build_graph()
+    initial_state: dict = {
+        "query": query,
+        "use_vector_store": use_vector_store,
+        "error": None,
+        "session_id": session.session_id,
+        "run_id": run_id,
+        "conversation_history": [t.to_dict() for t in session.conversation],
+    }
+
+    with start_workflow_run(
+        entrypoint="background",
+        query=query,
+        use_vector_store=use_vector_store,
+    ) as trace_ctx:
+        final_node_state: dict | None = None
+        try:
+            async for event in graph.astream(initial_state):
+                for _node_name, node_state in event.items():
+                    final_node_state = node_state
+
+            if not final_node_state:
+                raise RuntimeError("Research run produced no final state.")
+
+            await _record_session_run(session, user_id, run_id, query, final_node_state)
+            end_workflow_run(
+                trace_ctx,
+                status="success",
+                outputs={
+                    "node": "__end__",
+                    "has_report": bool(final_node_state.get("report")),
+                    "has_error": bool(final_node_state.get("error")),
+                },
+            )
+        except Exception as exc:
+            await update_session_run(
+                run_id=run_id,
+                user_id=user_id,
+                session_id=session.session_id,
+                patch={
+                    "status": "failed",
+                    "error_details": str(exc),
+                },
+            )
+            end_workflow_run(trace_ctx, status="error", error=str(exc))
+            raise
 
 
 async def _generate_suggestions(query: str, answer: str, context: str) -> list[str]:
@@ -523,30 +601,42 @@ async def delete_session_endpoint(
 
 @app.post("/sessions/{session_id}/research", tags=["Sessions"])
 async def session_research(
+    background_tasks: BackgroundTasks,
     session_id: str,
     body: ResearchRequest,
     current_user: AuthenticatedUser = Depends(get_authenticated_user),
 ):
-    """Run research within a session and persist the run for follow-up."""
+    """Queue background research within a session and return run metadata."""
     session = await get_session(session_id, current_user.user_id)
     if session is None:
         raise HTTPException(status_code=404, detail=f"Session '{session_id}' not found.")
+
     run_id = generate_run_id()
-    return StreamingResponse(
-        _stream_research(
-            body.query,
-            body.use_vector_store,
-            session=session,
-            run_id=run_id,
-            user_id=current_user.user_id,
-        ),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "X-Accel-Buffering": "no",
-            "X-Run-Id": run_id,
+    pending_run = SessionRun(
+        run_id=run_id,
+        query=body.query,
+        source_urls=[],
+        report="",
+        status="running",
+        error_details=None,
+    )
+    await create_session_run(
+        user_id=current_user.user_id,
+        session_id=session.session_id,
+        run=pending_run,
+    )
+    await outbox.enqueue_event(
+        "research/run.requested",
+        {
+            "session_id": session.session_id,
+            "run_id": run_id,
+            "user_id": current_user.user_id,
+            "query": body.query,
+            "use_vector_store": body.use_vector_store,
         },
     )
+    background_tasks.add_task(outbox.dispatch_outbox_events, limit=10)
+    return {"run_id": run_id, "status": "running"}
 
 
 @app.post("/sessions/{session_id}/followup", tags=["Sessions"])

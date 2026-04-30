@@ -3,14 +3,14 @@ import type { Session } from '@supabase/supabase-js'
 import {
   createSession,
   getSession,
-  streamSessionResearch,
+  startSessionResearch,
 } from '@/api/client'
 import { FollowupChat } from '@/components/research/FollowupChat'
 import { InlineProgress } from '@/components/research/InlineProgress'
 import { QueryComposer } from '@/components/research/QueryComposer'
 import { ReportViewer } from '@/components/research/ReportViewer'
 import { ScrollArea } from '@/components/ui/scroll-area'
-import type { ConversationTurn, ResearchStreamEvent } from '@/types'
+import type { ConversationTurn, SessionDetail } from '@/types'
 
 type Props = {
   authSession: Session | null
@@ -20,8 +20,7 @@ type Props = {
 }
 
 export function ResearchPage({ authSession, activeSessionId, onSessionActivated, onSessionsChanged }: Props) {
-  const [isStreaming, setIsStreaming] = useState(false)
-  const [events, setEvents] = useState<ResearchStreamEvent[]>([])
+  const [runStatus, setRunStatus] = useState<'idle' | 'running' | 'completed' | 'failed'>('idle')
   const [report, setReport] = useState('')
   const [lastQuery, setLastQuery] = useState('')
   const [error, setError] = useState<string | null>(null)
@@ -29,33 +28,72 @@ export function ResearchPage({ authSession, activeSessionId, onSessionActivated,
   const [runId, setRunId] = useState<string | null>(null)
   const [conversation, setConversation] = useState<ConversationTurn[]>([])
 
-  const abortRef = useRef<AbortController | null>(null)
   const loadedSessionRef = useRef<string | null>(null)
+  const pollTimerRef = useRef<number | null>(null)
+
+  const stopPolling = useCallback(() => {
+    if (pollTimerRef.current !== null) {
+      window.clearInterval(pollTimerRef.current)
+      pollTimerRef.current = null
+    }
+  }, [])
+
+  const syncFromSessionDetail = useCallback(
+    (detail: SessionDetail) => {
+      const latestRun = detail.runs.at(-1) ?? null
+      const nextStatus = latestRun?.status ?? 'idle'
+      loadedSessionRef.current = detail.session_id
+      setSessionId(detail.session_id)
+      setRunId(latestRun?.run_id ?? null)
+      setConversation(detail.conversation)
+      setLastQuery(latestRun?.query ?? '')
+      setReport(latestRun?.report ?? '')
+      setRunStatus(nextStatus)
+      setError(nextStatus === 'failed' ? latestRun?.error_details ?? 'Research failed.' : null)
+      if (nextStatus !== 'running') {
+        stopPolling()
+      }
+    },
+    [stopPolling],
+  )
+
+  const startPolling = useCallback(
+    (nextSessionId: string) => {
+      if (!authSession?.access_token) return
+      stopPolling()
+      pollTimerRef.current = window.setInterval(() => {
+        void getSession(nextSessionId, authSession.access_token)
+          .then((detail) => syncFromSessionDetail(detail))
+          .catch((pollError) => {
+            setError(pollError instanceof Error ? pollError.message : 'Failed to refresh session.')
+            setRunStatus('failed')
+            stopPolling()
+          })
+      }, 3000)
+    },
+    [authSession, stopPolling, syncFromSessionDetail],
+  )
 
   useEffect(() => {
     return () => {
-      abortRef.current?.abort()
+      stopPolling()
     }
-  }, [])
+  }, [stopPolling])
 
   const openSession = useCallback(
     async (selectedSessionId: string) => {
       if (!authSession?.access_token) return
       try {
         const detail = await getSession(selectedSessionId, authSession.access_token)
-        loadedSessionRef.current = detail.session_id
-        setSessionId(detail.session_id)
-        setRunId(detail.runs.at(-1)?.run_id ?? null)
-        setConversation(detail.conversation)
-        setLastQuery(detail.runs.at(-1)?.query ?? '')
-        setReport(detail.runs.at(-1)?.report ?? '')
-        setEvents([])
-        setError(null)
+        syncFromSessionDetail(detail)
+        if (detail.runs.at(-1)?.status === 'running') {
+          startPolling(detail.session_id)
+        }
       } catch (sessionError) {
         setError(sessionError instanceof Error ? sessionError.message : 'Failed to load session.')
       }
     },
-    [authSession],
+    [authSession, startPolling, syncFromSessionDetail],
   )
 
   // Respond to session selection from the rail
@@ -68,13 +106,14 @@ export function ResearchPage({ authSession, activeSessionId, onSessionActivated,
         setConversation([])
         setReport('')
         setLastQuery('')
-        setEvents([])
+        setRunStatus('idle')
+        stopPolling()
       }
       return
     }
     if (activeSessionId === loadedSessionRef.current) return
     void openSession(activeSessionId)
-  }, [activeSessionId, openSession])
+  }, [activeSessionId, openSession, stopPolling])
 
   const handleConversationUpdate = useCallback((turn: ConversationTurn) => {
     setConversation((prev) => [...prev, turn])
@@ -92,17 +131,12 @@ export function ResearchPage({ authSession, activeSessionId, onSessionActivated,
       }
       const normalizedQuery = query.trim()
 
-      abortRef.current?.abort()
-      const controller = new AbortController()
-      abortRef.current = controller
-
       setError(null)
       setReport('')
       setLastQuery(normalizedQuery)
-      setEvents([])
       setConversation([])
       setRunId(null)
-      setIsStreaming(true)
+      setRunStatus('running')
 
       let currentSessionId: string
       try {
@@ -114,46 +148,30 @@ export function ResearchPage({ authSession, activeSessionId, onSessionActivated,
         onSessionsChanged()
       } catch (sessionError) {
         setError(sessionError instanceof Error ? sessionError.message : 'Failed to create session.')
-        setIsStreaming(false)
+        setRunStatus('failed')
         return
       }
 
-      const streamOptions = {
-        signal: controller.signal,
-        onEvent: (event: ResearchStreamEvent) => {
-          setEvents((prev) => [...prev, event])
-          if (event.data.report && typeof event.data.report === 'string') setReport(event.data.report)
-          if (event.node === '__error__') {
-            setError(typeof event.data.error === 'string' ? event.data.error : 'Research failed unexpectedly.')
-          }
-        },
-        onDone: () => setIsStreaming(false),
-      }
-
       try {
-        const { runId: newRunId } = await streamSessionResearch(
+        const started = await startSessionResearch(
           currentSessionId,
           { query: normalizedQuery, use_vector_store: useVectorStore },
           authSession.access_token,
-          streamOptions,
         )
-        if (newRunId) setRunId(newRunId)
+        setRunId(started.run_id)
+        setRunStatus('running')
+        startPolling(currentSessionId)
       } catch (streamError) {
-        if (controller.signal.aborted) return
         const message =
-          streamError instanceof Error ? streamError.message : 'Unable to stream research updates.'
+          streamError instanceof Error ? streamError.message : 'Unable to start background research run.'
         setError(message)
-        setIsStreaming(false)
-      } finally {
-        if (abortRef.current === controller) {
-          abortRef.current = null
-        }
+        setRunStatus('failed')
       }
     },
-    [authSession, onSessionActivated, onSessionsChanged],
+    [authSession, onSessionActivated, onSessionsChanged, startPolling],
   )
 
-  const hasContent = !!(report || events.length > 0 || isStreaming || error)
+  const hasContent = !!(report || runStatus === 'running' || runStatus === 'failed' || error)
 
   return (
     <div className="flex h-dvh flex-col max-md:h-full">
@@ -169,8 +187,8 @@ export function ResearchPage({ authSession, activeSessionId, onSessionActivated,
             )}
             <QueryComposer
               onSubmit={handleSubmit}
-              disabled={isStreaming || !authSession}
-              isStreaming={isStreaming}
+              disabled={!authSession}
+              isStreaming={false}
             />
           </div>
         </div>
@@ -179,10 +197,10 @@ export function ResearchPage({ authSession, activeSessionId, onSessionActivated,
         <ScrollArea className="flex-1 min-h-0">
           <div className="space-y-6 py-8">
             <div className="mx-auto max-w-2xl px-6 max-md:px-4">
-              <InlineProgress events={events} isStreaming={isStreaming} />
+              <InlineProgress status={runStatus} error={error} />
             </div>
             <div className="mx-auto max-w-2xl px-6 max-md:px-4">
-              <ReportViewer report={report} query={lastQuery} isStreaming={isStreaming} error={error} />
+              <ReportViewer report={report} query={lastQuery} isStreaming={runStatus === 'running'} error={error} />
             </div>
             {report && sessionId && (
               <div className="w-full px-6 max-md:px-4">
