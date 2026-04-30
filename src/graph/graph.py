@@ -10,7 +10,6 @@ from src.graph.nodes import (
     search_node,
     retrieve_node,
     summarize_node,
-    combine_node,
     report_node,
     vector_store_node,
 )
@@ -59,7 +58,6 @@ def build_graph():
     builder.add_node("retrieve",     retrieve_node)
     builder.add_node("memory_context", memory_context_node)
     builder.add_node("summarize",    summarize_node)
-    builder.add_node("combine",      combine_node)
     builder.add_node("report",       report_node)
     builder.add_node("vector_store", vector_store_node)
     builder.add_node("abort",        _abort_node)
@@ -84,8 +82,7 @@ def build_graph():
 
     # Linear tail of the pipeline
     builder.add_edge("memory_context", "summarize")
-    builder.add_edge("summarize",    "combine")
-    builder.add_edge("combine",      "report")
+    builder.add_edge("summarize",    "report")
     builder.add_edge("report",       "vector_store")
 
     # Terminal edges

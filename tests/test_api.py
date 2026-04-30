@@ -33,7 +33,14 @@ def test_health_returns_ok():
 def test_research_streams_events():
     search_result = [{"url": "https://example.com", "title": "Example", "content": "Test"}]
     mock_llm = MagicMock()
-    mock_llm.ainvoke = AsyncMock(return_value=MagicMock(content="LLM output text."))
+    mock_llm.ainvoke = AsyncMock(
+        side_effect=[
+            MagicMock(
+                content='[{"url":"https://example.com","title":"Example","summary":"Summary text."}]'
+            ),
+            MagicMock(content="# Report\nFinal output."),
+        ]
+    )
 
     with (
         patch("src.graph.nodes.perform_search", return_value=search_result),

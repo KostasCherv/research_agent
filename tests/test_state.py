@@ -9,7 +9,6 @@ def test_state_is_typed_dict():
         "search_results": [],
         "retrieved_contents": [],
         "summaries": [],
-        "combined_insights": "",
         "report": "",
         "report_metadata": {},
         "error": None,

@@ -222,7 +222,7 @@ async def _stream_research(
                         "data": {
                             k: v
                             for k, v in node_state.items()
-                            if k in {"error", "report", "combined_insights"}
+                            if k in {"error", "report"}
                         },
                     }
                     yield f"data: {json.dumps(payload)}\n\n"

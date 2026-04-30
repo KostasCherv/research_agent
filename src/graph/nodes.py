@@ -3,6 +3,7 @@
 import asyncio
 import json
 import logging
+import re
 from datetime import datetime, UTC
 
 from src.graph.state import ResearchState
@@ -15,6 +16,42 @@ from src.tools.vector_store import VectorStoreManager
 from src.errors import SearchError, FetchError, LLMError
 
 logger = logging.getLogger(__name__)
+
+
+def _extract_llm_text(response: object) -> str:
+    """Extract plain text from provider-specific LLM response shapes."""
+    content = response.content if hasattr(response, "content") else response
+    if isinstance(content, str):
+        return content.strip()
+    if isinstance(content, list):
+        parts: list[str] = []
+        for block in content:
+            if isinstance(block, str):
+                parts.append(block)
+                continue
+            if isinstance(block, dict):
+                text = block.get("text") or block.get("content")
+                if isinstance(text, str):
+                    parts.append(text)
+        return "\n".join(part.strip() for part in parts if part and part.strip()).strip()
+    return str(content).strip()
+
+
+def _extract_json_candidate(text: str) -> str:
+    """Normalize common LLM wrappers and return best-effort JSON substring."""
+    candidate = text.strip()
+    if not candidate:
+        return ""
+
+    fenced = re.match(r"^```(?:json)?\s*(.*?)\s*```$", candidate, flags=re.DOTALL)
+    if fenced:
+        candidate = fenced.group(1).strip()
+
+    start = candidate.find("[")
+    end = candidate.rfind("]")
+    if start != -1 and end != -1 and end > start:
+        return candidate[start : end + 1].strip()
+    return candidate
 
 
 async def _invoke_llm(
@@ -201,11 +238,40 @@ async def summarize_node(state: ResearchState) -> ResearchState:
                 llm=llm,
                 metadata={"source_count": len(source_blocks), "query": query},
             )
-            response_text = (
-                str(response.content) if hasattr(response, "content") else str(response)
-            ).strip()
+            response_text = _extract_llm_text(response)
+            parsed = None
+            parse_error: Exception | None = None
 
-            parsed = json.loads(response_text)
+            for attempt in range(2):
+                candidate_text = _extract_json_candidate(response_text)
+                try:
+                    maybe_parsed = json.loads(candidate_text)
+                    if isinstance(maybe_parsed, dict) and isinstance(
+                        maybe_parsed.get("summaries"), list
+                    ):
+                        maybe_parsed = maybe_parsed["summaries"]
+                    parsed = maybe_parsed
+                    break
+                except Exception as exc:
+                    parse_error = exc
+                    if attempt == 1:
+                        break
+                    repair_prompt = (
+                        "Convert the text below into valid JSON only, with this exact schema:\n"
+                        '[{"url":"<source-url>","title":"<source-title>","summary":"<3-5 sentences>"}]\n\n'
+                        "Do not add markdown fences or explanations.\n\n"
+                        f"TEXT:\n{response_text}"
+                    )
+                    repair_response = await _invoke_llm(
+                        repair_prompt,
+                        step_name="summarize_repair",
+                        llm=llm,
+                        metadata={"source_count": len(source_blocks), "query": query},
+                    )
+                    response_text = _extract_llm_text(repair_response)
+
+            if parsed is None:
+                raise ValueError(f"Could not parse summarize JSON: {parse_error}")
             if not isinstance(parsed, list):
                 raise ValueError("LLM summarize output must be a JSON list")
 
@@ -238,66 +304,18 @@ async def summarize_node(state: ResearchState) -> ResearchState:
 
 
 # ---------------------------------------------------------------------------
-# Node 4: Combine
-# ---------------------------------------------------------------------------
-
-
-async def combine_node(state: ResearchState) -> ResearchState:
-    """Merge all per-source summaries into a single coherent synthesis.
-
-    Populates ``combined_insights``.
-    """
-    summaries = state.get("summaries", [])
-    query = state.get("query", "")
-    with start_step_span(
-        name="combine_node",
-        run_type="chain",
-        node_name="combine",
-        inputs={"summary_count": len(summaries)},
-    ):
-        logger.info("[combine_node] combining %d summaries", len(summaries))
-
-        summaries_text = "\n\n".join(
-            f"Source: {s['title']} ({s['url']})\n{s['summary']}" for s in summaries
-        )
-        memory_context = state.get("memory_context", "")
-        prompt = (
-            f"You are a research analyst. Given the following source summaries for the query "
-            f"'{query}', write a comprehensive and well-structured synthesis of the key insights "
-            f"(3–6 paragraphs). Do not repeat the same point from multiple sources; instead merge "
-            f"and reconcile them.\n\n{summaries_text}\n\n"
-            f"Prior context from past internal reports (may be stale):\n{memory_context}"
-        )
-
-        llm = get_llm(temperature=0.3)
-        try:
-            response = await _invoke_llm(
-                prompt,
-                step_name="combine",
-                llm=llm,
-                metadata={"summary_count": len(summaries)},
-            )
-            combined = (
-                str(response.content) if hasattr(response, "content") else str(response)
-            )
-            return {**state, "combined_insights": combined.strip()}
-        except Exception as exc:
-            raise LLMError(f"Combine step failed: {exc}") from exc
-
-
-# ---------------------------------------------------------------------------
-# Node 5: Report
+# Node 4: Report
 # ---------------------------------------------------------------------------
 
 
 async def report_node(state: ResearchState) -> ResearchState:
-    """Generate a final structured markdown report.
+    """Generate a final structured markdown report in one LLM call.
 
     Populates ``report`` and ``report_metadata``.
     """
     query = state.get("query", "")
-    combined = state.get("combined_insights", "")
     summaries = state.get("summaries", [])
+    memory_context = state.get("memory_context", "")
     with start_step_span(
         name="report_node",
         run_type="chain",
@@ -309,6 +327,10 @@ async def report_node(state: ResearchState) -> ResearchState:
         sources_md = "\n".join(
             f"- [{s['title']}]({s['url']})" for s in summaries if s.get("url")
         )
+        summaries_text = "\n\n".join(
+            f"Source: {s.get('title', '')} ({s.get('url', '')})\n{s.get('summary', '')}"
+            for s in summaries
+        )
         prompt = (
             f"You are a professional research report writer. Based on the synthesis below, "
             f"produce a polished markdown report with:\n"
@@ -316,7 +338,9 @@ async def report_node(state: ResearchState) -> ResearchState:
             f"2. An executive summary section\n"
             f"3. Key findings as bullet points\n"
             f"4. A conclusion\n\n"
-            f"Query: {query}\n\nSynthesis:\n{combined}"
+            f"Query: {query}\n\n"
+            f"Source summaries:\n{summaries_text}\n\n"
+            f"Prior context from past internal reports (may be stale):\n{memory_context}"
         )
 
         llm = get_llm(temperature=0.2)
@@ -348,7 +372,7 @@ async def report_node(state: ResearchState) -> ResearchState:
 
 
 # ---------------------------------------------------------------------------
-# Node 6: Vector Store
+# Node 5: Vector Store
 # ---------------------------------------------------------------------------
 
 
@@ -396,7 +420,7 @@ async def vector_store_node(state: ResearchState) -> ResearchState:
 
 
 # ---------------------------------------------------------------------------
-# Node 7: Memory Context
+# Node 6: Memory Context
 # ---------------------------------------------------------------------------
 
 

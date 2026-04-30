@@ -13,8 +13,7 @@ flowchart LR
     retrieve -->|"ok"| memoryContext["memory_context (Pinecone search)"]
     retrieve -->|"empty"| emptyNode["empty"]
     memoryContext --> summarize["summarize (LLM)"]
-    summarize --> combine["combine (LLM)"]
-    combine --> report["report (LLM markdown)"]
+    summarize --> report["report (LLM markdown)"]
     report --> vectorStore["vector_store (optional Pinecone persist)"]
     vectorStore --> endNode["END"]
     abortNode --> endNode
@@ -252,7 +251,7 @@ SSE event types:
 The pipeline includes end-to-end LangSmith instrumentation, so you can track the entire multi-step flow in one place.
 
 - A single **root run** is created per workflow execution (CLI or API).
-- Every graph node (`search`, `retrieve`, `memory_context`, `summarize`, `combine`, `report`, `vector_store`) is traced as a child span.
+- Every graph node (`search`, `retrieve`, `memory_context`, `summarize`, `report`, `vector_store`) is traced as a child span.
 - External operations are traced as nested spans (Tavily search, URL fetch, LLM calls, Pinecone reads/writes).
 - Routing and terminal outcomes are visible (`continue`, `abort`, `empty`) with status and timing context.
 - Redaction-by-default protects sensitive payloads while preserving useful debugging metadata.

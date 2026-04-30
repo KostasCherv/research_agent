@@ -13,7 +13,7 @@ export function InlineProgress({ status, error }: Props) {
       {status === 'running' && (
         <span className="flex items-center gap-1 text-xs px-2 py-0.5 rounded-full border border-primary/40 bg-primary/5 text-primary">
           <Loader2 size={10} className="animate-spin" />
-          Research in progress...
+          Researching and drafting report...
         </span>
       )}
       {status === 'failed' && (

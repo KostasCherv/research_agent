@@ -58,7 +58,7 @@ export function ReportViewer({ report, query, isStreaming, error }: Props) {
       )}
       {!error && !report && isStreaming && (
         <p className="rounded-md border bg-muted/35 px-3 py-2 text-sm text-muted-foreground">
-          Generating report
+          Drafting final report...
         </p>
       )}
       {report && (

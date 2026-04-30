@@ -22,10 +22,7 @@ class ResearchState(TypedDict, total=False):
     # Summarize node output
     summaries: list[dict]           # [{url, title, summary}, ...]
 
-    # Combine node output
-    combined_insights: str          # Single merged synthesis
-
-    # Report node output
+    # Final report node output
     report: str                     # Final markdown report
     report_metadata: dict           # {title, sources, generated_at}
 

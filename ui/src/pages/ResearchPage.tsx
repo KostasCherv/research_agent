@@ -38,6 +38,16 @@ export function ResearchPage({ authSession, activeSessionId, onSessionActivated,
     }
   }, [])
 
+  const resetViewState = useCallback(() => {
+    setSessionId(null)
+    setRunId(null)
+    setConversation([])
+    setReport('')
+    setLastQuery('')
+    setRunStatus('idle')
+    setError(null)
+  }, [])
+
   const syncFromSessionDetail = useCallback(
     (detail: SessionDetail) => {
       const latestRun = detail.runs.at(-1) ?? null
@@ -101,19 +111,15 @@ export function ResearchPage({ authSession, activeSessionId, onSessionActivated,
     if (!activeSessionId) {
       if (activeSessionId === null && loadedSessionRef.current !== null) {
         loadedSessionRef.current = null
-        setSessionId(null)
-        setRunId(null)
-        setConversation([])
-        setReport('')
-        setLastQuery('')
-        setRunStatus('idle')
+        queueMicrotask(resetViewState)
         stopPolling()
       }
       return
     }
     if (activeSessionId === loadedSessionRef.current) return
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     void openSession(activeSessionId)
-  }, [activeSessionId, openSession, stopPolling])
+  }, [activeSessionId, openSession, resetViewState, stopPolling])
 
   const handleConversationUpdate = useCallback((turn: ConversationTurn) => {
     setConversation((prev) => [...prev, turn])

@@ -45,7 +45,6 @@ def test_graph_invoke_happy_path(monkeypatch):
             MagicMock(
                 content='[{"url":"https://example.com","title":"Example","summary":"Source summary."}]'
             ),
-            MagicMock(content="Combined insights."),
             MagicMock(content="# Report\nFinal output."),
         ]
     )
@@ -75,7 +74,6 @@ def test_graph_invoke_continues_when_memory_lookup_fails():
             MagicMock(
                 content='[{"url":"https://example.com","title":"Example","summary":"Source summary."}]'
             ),
-            MagicMock(content="Combined insights."),
             MagicMock(content="# Report\nFinal output."),
         ]
     )

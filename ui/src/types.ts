@@ -13,7 +13,6 @@ export type ResearchStreamEvent = {
   data: {
     error?: string
     report?: string
-    combined_insights?: string
     [key: string]: unknown
   }
 }

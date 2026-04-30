@@ -111,22 +111,57 @@ def test_summarize_node_makes_single_call_for_multiple_sources():
     assert len(state["summaries"]) == 2
 
 
-# ---------------------------------------------------------------------------
-# combine_node
-# ---------------------------------------------------------------------------
-
-def test_combine_node_merges_summaries():
+def test_summarize_node_parses_markdown_fenced_json():
     mock_llm = MagicMock()
-    mock_llm.ainvoke = AsyncMock(return_value=MagicMock(content="Combined insights."))
+    mock_llm.ainvoke = AsyncMock(
+        return_value=MagicMock(
+            content='```json\n[{"url":"https://a.com","title":"A","summary":"Summary A"}]\n```'
+        )
+    )
 
     with patch("src.graph.nodes.get_llm", return_value=mock_llm):
-        from src.graph.nodes import combine_node
-        state = asyncio.run(combine_node({
-            "query": "LangGraph",
-            "summaries": [{"url": "https://a.com", "title": "A", "summary": "Summary A"}],
-        }))
+        from src.graph.nodes import summarize_node
 
-    assert state["combined_insights"] == "Combined insights."
+        state = asyncio.run(
+            summarize_node(
+                {
+                    "query": "LangGraph",
+                    "retrieved_contents": [
+                        {"url": "https://a.com", "title": "A", "raw_text": "Alpha text"}
+                    ],
+                }
+            )
+        )
+
+    assert len(state["summaries"]) == 1
+    assert state["summaries"][0]["summary"] == "Summary A"
+
+
+def test_summarize_node_repairs_non_json_output_once():
+    mock_llm = MagicMock()
+    mock_llm.ainvoke = AsyncMock(
+        side_effect=[
+            MagicMock(content="Here is the summary in plain text."),
+            MagicMock(content='[{"url":"https://a.com","title":"A","summary":"Summary A"}]'),
+        ]
+    )
+
+    with patch("src.graph.nodes.get_llm", return_value=mock_llm):
+        from src.graph.nodes import summarize_node
+
+        state = asyncio.run(
+            summarize_node(
+                {
+                    "query": "LangGraph",
+                    "retrieved_contents": [
+                        {"url": "https://a.com", "title": "A", "raw_text": "Alpha text"}
+                    ],
+                }
+            )
+        )
+
+    assert mock_llm.ainvoke.await_count == 2
+    assert len(state["summaries"]) == 1
 
 
 # ---------------------------------------------------------------------------
@@ -141,8 +176,8 @@ def test_report_node_generates_report():
         from src.graph.nodes import report_node
         state = asyncio.run(report_node({
             "query": "LangGraph",
-            "combined_insights": "Insights text",
             "summaries": [{"url": "https://a.com", "title": "A", "summary": "x"}],
+            "memory_context": "older context",
         }))
 
     assert "# My Report" in state["report"]
