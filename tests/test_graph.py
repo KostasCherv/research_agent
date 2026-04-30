@@ -1,6 +1,8 @@
 """Tests for the compiled LangGraph (src/graph/graph.py)"""
 
+import asyncio
 from unittest.mock import patch, MagicMock
+from unittest.mock import AsyncMock
 
 
 def _make_mock_nodes():
@@ -9,11 +11,6 @@ def _make_mock_nodes():
         return state
 
     return passthrough
-
-
-def _mock_asyncio_run(coro):
-    coro.close()  # prevent "coroutine was never awaited" warnings
-    return "Fetched page text"
 
 
 def test_build_graph_returns_compiled_graph():
@@ -33,7 +30,9 @@ def test_graph_invoke_with_error_reaches_abort(monkeypatch):
         graph = build_graph()
 
         # Patch LLM to ensure we don't need real API keys
-        final = graph.invoke({"query": "test", "use_vector_store": False, "error": None})
+        final = asyncio.run(
+            graph.ainvoke({"query": "test", "use_vector_store": False, "error": None})
+        )
 
     # Pipeline should abort and set an error
     assert final.get("error") is not None
@@ -41,19 +40,21 @@ def test_graph_invoke_with_error_reaches_abort(monkeypatch):
 
 def test_graph_invoke_happy_path(monkeypatch):
     mock_llm = MagicMock()
-    mock_llm.invoke.return_value = MagicMock(content="Mock LLM output.")
+    mock_llm.ainvoke = AsyncMock(return_value=MagicMock(content="Mock LLM output."))
 
     search_result = [{"url": "https://example.com", "title": "Example", "content": "Content"}]
 
     with (
         patch("src.graph.nodes.perform_search", return_value=search_result),
-        patch("src.graph.nodes.asyncio.run", side_effect=_mock_asyncio_run),
+        patch("src.graph.nodes.fetch_url_content", new=AsyncMock(return_value="Fetched page text")),
         patch("src.graph.nodes.get_llm", return_value=mock_llm),
         patch("src.graph.nodes.VectorStoreManager"),
     ):
         from src.graph.graph import build_graph
         graph = build_graph()
-        final = graph.invoke({"query": "LangGraph", "use_vector_store": False, "error": None})
+        final = asyncio.run(
+            graph.ainvoke({"query": "LangGraph", "use_vector_store": False, "error": None})
+        )
 
     assert "report" in final
     assert len(final["report"]) > 0
@@ -61,13 +62,13 @@ def test_graph_invoke_happy_path(monkeypatch):
 
 def test_graph_invoke_continues_when_memory_lookup_fails():
     mock_llm = MagicMock()
-    mock_llm.invoke.return_value = MagicMock(content="Mock LLM output.")
+    mock_llm.ainvoke = AsyncMock(return_value=MagicMock(content="Mock LLM output."))
 
     search_result = [{"url": "https://example.com", "title": "Example", "content": "Content"}]
 
     with (
         patch("src.graph.nodes.perform_search", return_value=search_result),
-        patch("src.graph.nodes.asyncio.run", side_effect=_mock_asyncio_run),
+        patch("src.graph.nodes.fetch_url_content", new=AsyncMock(return_value="Fetched page text")),
         patch("src.graph.nodes.get_llm", return_value=mock_llm),
         patch("src.graph.nodes.VectorStoreManager") as mock_vs_cls,
     ):
@@ -77,7 +78,9 @@ def test_graph_invoke_continues_when_memory_lookup_fails():
 
         from src.graph.graph import build_graph
         graph = build_graph()
-        final = graph.invoke({"query": "LangGraph", "use_vector_store": False, "error": None})
+        final = asyncio.run(
+            graph.ainvoke({"query": "LangGraph", "use_vector_store": False, "error": None})
+        )
 
     assert "report" in final
     assert len(final["report"]) > 0

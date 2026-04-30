@@ -1,7 +1,6 @@
 """All LangGraph nodes for the research pipeline."""
 
 import asyncio
-import concurrent.futures
 import logging
 from datetime import datetime, UTC
 
@@ -17,7 +16,9 @@ from src.errors import SearchError, FetchError, LLMError
 logger = logging.getLogger(__name__)
 
 
-def _invoke_llm(prompt: str, *, step_name: str, llm, metadata: dict[str, object] | None = None):
+async def _invoke_llm(
+    prompt: str, *, step_name: str, llm, metadata: dict[str, object] | None = None
+):
     with start_step_span(
         name=f"{step_name}.llm_invoke",
         run_type="llm",
@@ -26,7 +27,7 @@ def _invoke_llm(prompt: str, *, step_name: str, llm, metadata: dict[str, object]
         metadata=metadata or {},
         tags=["llm"],
     ):
-        return llm.invoke(
+        return await llm.ainvoke(
             prompt,
             config={
                 "tags": build_trace_tags(["llm"]),
@@ -40,7 +41,7 @@ def _invoke_llm(prompt: str, *, step_name: str, llm, metadata: dict[str, object]
 # ---------------------------------------------------------------------------
 
 
-def search_node(state: ResearchState) -> ResearchState:
+async def search_node(state: ResearchState) -> ResearchState:
     """Run a Tavily web search for the user query.
 
     Populates ``search_results`` or sets ``error`` on failure.
@@ -61,7 +62,7 @@ def search_node(state: ResearchState) -> ResearchState:
                 inputs={"query": query},
                 tags=["external", "tavily"],
             ):
-                results = perform_search(query)
+                results = await asyncio.to_thread(perform_search, query)
             logger.info("[search_node] got %d results", len(results))
             return {**state, "search_results": results, "error": None}
         except SearchError as exc:
@@ -74,7 +75,7 @@ def search_node(state: ResearchState) -> ResearchState:
 # ---------------------------------------------------------------------------
 
 
-def retrieve_node(state: ResearchState) -> ResearchState:
+async def retrieve_node(state: ResearchState) -> ResearchState:
     """Fetch full text for each search-result URL (up to 2 retries each).
 
     Populates ``retrieved_contents``.
@@ -102,7 +103,7 @@ def retrieve_node(state: ResearchState) -> ResearchState:
                         inputs={"url": url, "attempt": attempt},
                         tags=["external", "http"],
                     ):
-                        text = asyncio.run(fetch_url_content(url))
+                        text = await fetch_url_content(url)
                     retrieved.append(
                         {"url": url, "title": item.get("title", ""), "raw_text": text}
                     )
@@ -129,7 +130,7 @@ def retrieve_node(state: ResearchState) -> ResearchState:
 # ---------------------------------------------------------------------------
 
 
-def summarize_node(state: ResearchState) -> ResearchState:
+async def summarize_node(state: ResearchState) -> ResearchState:
     """Ask the LLM to summarize each retrieved source.
 
     Populates ``summaries``.
@@ -157,7 +158,7 @@ def summarize_node(state: ResearchState) -> ResearchState:
                 f"Article ({item['url']}):\n{text}"
             )
             try:
-                response = _invoke_llm(
+                response = await _invoke_llm(
                     prompt,
                     step_name="summarize",
                     llm=llm,
@@ -184,7 +185,7 @@ def summarize_node(state: ResearchState) -> ResearchState:
 # ---------------------------------------------------------------------------
 
 
-def combine_node(state: ResearchState) -> ResearchState:
+async def combine_node(state: ResearchState) -> ResearchState:
     """Merge all per-source summaries into a single coherent synthesis.
 
     Populates ``combined_insights``.
@@ -213,7 +214,7 @@ def combine_node(state: ResearchState) -> ResearchState:
 
         llm = get_llm(temperature=0.3)
         try:
-            response = _invoke_llm(
+            response = await _invoke_llm(
                 prompt,
                 step_name="combine",
                 llm=llm,
@@ -232,7 +233,7 @@ def combine_node(state: ResearchState) -> ResearchState:
 # ---------------------------------------------------------------------------
 
 
-def report_node(state: ResearchState) -> ResearchState:
+async def report_node(state: ResearchState) -> ResearchState:
     """Generate a final structured markdown report.
 
     Populates ``report`` and ``report_metadata``.
@@ -263,7 +264,7 @@ def report_node(state: ResearchState) -> ResearchState:
 
         llm = get_llm(temperature=0.2)
         try:
-            response = _invoke_llm(
+            response = await _invoke_llm(
                 prompt,
                 step_name="report",
                 llm=llm,
@@ -294,7 +295,7 @@ def report_node(state: ResearchState) -> ResearchState:
 # ---------------------------------------------------------------------------
 
 
-def vector_store_node(state: ResearchState) -> ResearchState:
+async def vector_store_node(state: ResearchState) -> ResearchState:
     """Persist the final report to Pinecone (runs only when enabled).
 
     This node is a no-op if ``use_vector_store`` is False.
@@ -323,7 +324,12 @@ def vector_store_node(state: ResearchState) -> ResearchState:
                 inputs={"query": query},
                 tags=["external", "pinecone"],
             ):
-                doc_id = manager.save_report(query=query, report=report, metadata=metadata)
+                doc_id = await asyncio.to_thread(
+                    manager.save_report,
+                    query=query,
+                    report=report,
+                    metadata=metadata,
+                )
             logger.info("[vector_store_node] saved as %s", doc_id)
         except Exception as exc:
             # Non-fatal: log the error but don't abort the pipeline
@@ -337,7 +343,7 @@ def vector_store_node(state: ResearchState) -> ResearchState:
 # ---------------------------------------------------------------------------
 
 
-def memory_context_node(state: ResearchState) -> ResearchState:
+async def memory_context_node(state: ResearchState) -> ResearchState:
     """Generate a memory context for the LLM using the vector store.
 
     Populates ``memory_context`` with the most relevant reports from the vector store.
@@ -358,18 +364,17 @@ def memory_context_node(state: ResearchState) -> ResearchState:
                 inputs={"query": query, "n_results": 3},
                 tags=["external", "pinecone"],
             ):
-                # Guard against long/hung vector-store calls so the research
-                # pipeline can continue even if Pinecone is slow/unreachable.
-                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-                    future = executor.submit(vector_store.search_reports, query)
-                    context = future.result(timeout=8)
+                context = await asyncio.wait_for(
+                    asyncio.to_thread(vector_store.search_reports, query),
+                    timeout=8,
+                )
             if context:
                 context = "\n\n".join([c["document"] for c in context])[:2000]
             else:
                 context = ""
 
             return {**state, "memory_context": context}
-        except concurrent.futures.TimeoutError:
+        except asyncio.TimeoutError:
             logger.warning("[memory_context_node] timed out while fetching context; continuing without memory context.")
             return {**state, "memory_context": ""}
         except Exception as exc:

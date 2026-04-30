@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import time
 from contextlib import contextmanager
 from unittest.mock import AsyncMock, MagicMock, patch
 from fastapi.testclient import TestClient
@@ -12,11 +13,6 @@ from src.rag import RagValidationError
 from src.sessions import Session, SessionRun
 
 client = TestClient(app)
-
-
-def _mock_asyncio_run(coro):
-    coro.close()  # prevent "coroutine was never awaited" warnings
-    return "Page text"
 
 
 def _auth_override() -> AuthenticatedUser:
@@ -37,11 +33,11 @@ def test_health_returns_ok():
 def test_research_streams_events():
     search_result = [{"url": "https://example.com", "title": "Example", "content": "Test"}]
     mock_llm = MagicMock()
-    mock_llm.invoke.return_value = MagicMock(content="LLM output text.")
+    mock_llm.ainvoke = AsyncMock(return_value=MagicMock(content="LLM output text."))
 
     with (
         patch("src.graph.nodes.perform_search", return_value=search_result),
-        patch("src.graph.nodes.asyncio.run", side_effect=_mock_asyncio_run),
+        patch("src.graph.nodes.fetch_url_content", new=AsyncMock(return_value="Page text")),
         patch("src.graph.nodes.get_llm", return_value=mock_llm),
         patch("src.graph.nodes.VectorStoreManager"),
     ):
@@ -283,6 +279,66 @@ def test_execute_research_run_marks_failed_on_error():
         session_id="session-1",
         patch={"status": "failed", "error_details": "graph failure"},
     )
+
+
+def test_execute_research_runs_can_overlap_in_time():
+    from src.api.endpoints import _execute_research_run
+
+    starts: list[tuple[str, float]] = []
+    ends: list[tuple[str, float]] = []
+
+    class SlowGraph:
+        async def astream(self, initial_state):
+            run_id = initial_state["run_id"]
+            starts.append((run_id, time.perf_counter()))
+            await asyncio.sleep(0.05)
+            ends.append((run_id, time.perf_counter()))
+            yield {
+                "report_node": {
+                    "report": f"Final report {run_id}",
+                    "retrieved_contents": [],
+                    "summaries": [],
+                }
+            }
+
+    @contextmanager
+    def _mock_trace_ctx(**_kwargs):
+        yield MagicMock(workflow_id="wf-1")
+
+    session = Session(session_id="session-1", runs=[], conversation=[], created_at="2026")
+
+    with (
+        patch("src.api.endpoints.get_session", new=AsyncMock(return_value=session)),
+        patch("src.api.endpoints.build_graph", return_value=SlowGraph()),
+        patch("src.api.endpoints._record_session_run", new=AsyncMock(return_value=None)),
+        patch("src.api.endpoints.start_workflow_run", side_effect=_mock_trace_ctx),
+        patch("src.api.endpoints.end_workflow_run"),
+    ):
+        async def _run_pair() -> None:
+            await asyncio.gather(
+                _execute_research_run(
+                    session_id="session-1",
+                    run_id="run-a",
+                    user_id="user-1",
+                    query="What is LangGraph?",
+                    use_vector_store=False,
+                ),
+                _execute_research_run(
+                    session_id="session-1",
+                    run_id="run-b",
+                    user_id="user-1",
+                    query="What is LangGraph?",
+                    use_vector_store=False,
+                ),
+            )
+
+        asyncio.run(_run_pair())
+
+    assert len(starts) == 2
+    assert len(ends) == 2
+    latest_start = max(ts for _, ts in starts)
+    earliest_end = min(ts for _, ts in ends)
+    assert latest_start < earliest_end
 
 
 def test_record_session_run_raises_when_finalize_update_fails():

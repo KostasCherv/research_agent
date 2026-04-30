@@ -305,8 +305,20 @@ async def _execute_research_run(
     use_vector_store: bool,
 ) -> None:
     """Execute one research run in the background and persist terminal status."""
+    logger.info(
+        "[run] start run_id=%s session_id=%s user_id=%s use_vector_store=%s",
+        run_id,
+        session_id,
+        user_id,
+        use_vector_store,
+    )
     session = await get_session(session_id, user_id)
     if session is None:
+        logger.warning(
+            "[run] abort run_id=%s session_id=%s reason=session-not-found",
+            run_id,
+            session_id,
+        )
         await update_session_run(
             run_id=run_id,
             user_id=user_id,
@@ -343,6 +355,7 @@ async def _execute_research_run(
                 raise RuntimeError("Research run produced no final state.")
 
             await _record_session_run(session, user_id, run_id, query, final_node_state)
+            logger.info("[run] end run_id=%s status=completed", run_id)
             end_workflow_run(
                 trace_ctx,
                 status="success",
@@ -362,6 +375,7 @@ async def _execute_research_run(
                     "error_details": str(exc),
                 },
             )
+            logger.exception("[run] end run_id=%s status=failed error=%s", run_id, exc)
             end_workflow_run(trace_ctx, status="error", error=str(exc))
             raise
 
