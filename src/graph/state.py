@@ -19,6 +19,10 @@ class ResearchState(TypedDict, total=False):
     # Retrieve node output
     retrieved_contents: list[dict]  # [{url, title, raw_text}, ...]
 
+    # Rerank node output
+    reranked_contents: list[dict]   # [{url, title, raw_text, score?}, ...]
+    rerank_metadata: dict           # {fallback, reason?, model, input_count, output_count}
+
     # Summarize node output
     summaries: list[dict]           # [{url, title, summary}, ...]
 

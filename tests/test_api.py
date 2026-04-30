@@ -46,8 +46,19 @@ def test_research_streams_events():
         patch("src.graph.nodes.perform_search", return_value=search_result),
         patch("src.graph.nodes.fetch_url_content", new=AsyncMock(return_value="Page text")),
         patch("src.graph.nodes.get_llm", return_value=mock_llm),
-        patch("src.graph.nodes.VectorStoreManager"),
+        patch("src.graph.nodes.VectorStoreManager") as mock_vs_cls,
     ):
+        mock_vs = MagicMock()
+        mock_vs.search_reports.return_value = []
+        mock_vs.rerank_documents.return_value = [
+            {
+                "url": "https://example.com",
+                "title": "Example",
+                "raw_text": "Page text",
+                "score": 0.9,
+            }
+        ]
+        mock_vs_cls.return_value = mock_vs
         response = client.post(
             "/research",
             json={"query": "What is LangGraph?", "use_vector_store": False},

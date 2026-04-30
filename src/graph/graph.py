@@ -9,6 +9,7 @@ from src.graph.nodes import (
     memory_context_node,
     search_node,
     retrieve_node,
+    rerank_node,
     summarize_node,
     report_node,
     vector_store_node,
@@ -57,6 +58,7 @@ def build_graph():
     builder.add_node("search",       search_node)
     builder.add_node("retrieve",     retrieve_node)
     builder.add_node("memory_context", memory_context_node)
+    builder.add_node("rerank",       rerank_node)
     builder.add_node("summarize",    summarize_node)
     builder.add_node("report",       report_node)
     builder.add_node("vector_store", vector_store_node)
@@ -81,7 +83,8 @@ def build_graph():
     )
 
     # Linear tail of the pipeline
-    builder.add_edge("memory_context", "summarize")
+    builder.add_edge("memory_context", "rerank")
+    builder.add_edge("rerank",       "summarize")
     builder.add_edge("summarize",    "report")
     builder.add_edge("report",       "vector_store")
 

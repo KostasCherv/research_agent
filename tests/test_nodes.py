@@ -59,8 +59,107 @@ def test_retrieve_node_falls_back_to_snippet_on_failure():
 
 
 # ---------------------------------------------------------------------------
+# rerank_node
+# ---------------------------------------------------------------------------
+
+def test_rerank_node_returns_top_k_ranked_sources():
+    with patch("src.graph.nodes.VectorStoreManager") as mock_cls:
+        mock_manager = MagicMock()
+        mock_manager.rerank_documents.return_value = [
+            {
+                "url": "https://b.com",
+                "title": "B",
+                "raw_text": "Beta",
+                "score": 0.9,
+            },
+            {
+                "url": "https://a.com",
+                "title": "A",
+                "raw_text": "Alpha",
+                "score": 0.4,
+            },
+        ]
+        mock_cls.return_value = mock_manager
+
+        from src.graph.nodes import rerank_node
+
+        state = asyncio.run(
+            rerank_node(
+                {
+                    "query": "LangGraph",
+                    "retrieved_contents": [
+                        {"url": "https://a.com", "title": "A", "raw_text": "Alpha"},
+                        {"url": "https://b.com", "title": "B", "raw_text": "Beta"},
+                    ],
+                }
+            )
+        )
+
+    assert [row["url"] for row in state["reranked_contents"]] == [
+        "https://b.com",
+        "https://a.com",
+    ]
+    assert state["rerank_metadata"]["fallback"] is False
+
+
+def test_rerank_node_falls_back_to_retrieved_contents_on_failure():
+    with patch("src.graph.nodes.VectorStoreManager") as mock_cls:
+        mock_manager = MagicMock()
+        mock_manager.rerank_documents.side_effect = RuntimeError("rerank unavailable")
+        mock_cls.return_value = mock_manager
+
+        from src.graph.nodes import rerank_node
+
+        state = asyncio.run(
+            rerank_node(
+                {
+                    "query": "LangGraph",
+                    "retrieved_contents": [
+                        {"url": "https://a.com", "title": "A", "raw_text": "Alpha"},
+                        {"url": "https://b.com", "title": "B", "raw_text": "Beta"},
+                    ],
+                }
+            )
+        )
+
+    assert [row["url"] for row in state["reranked_contents"]] == [
+        "https://a.com",
+        "https://b.com",
+    ]
+    assert state["rerank_metadata"]["fallback"] is True
+
+
+# ---------------------------------------------------------------------------
 # summarize_node
 # ---------------------------------------------------------------------------
+
+
+def test_summarize_node_prefers_reranked_contents_when_present():
+    mock_llm = MagicMock()
+    mock_llm.ainvoke = AsyncMock(
+        return_value=MagicMock(
+            content='[{"url":"https://b.com","title":"B","summary":"Summary B"}]'
+        )
+    )
+
+    with patch("src.graph.nodes.get_llm", return_value=mock_llm):
+        from src.graph.nodes import summarize_node
+
+        state = asyncio.run(
+            summarize_node(
+                {
+                    "query": "LangGraph",
+                    "retrieved_contents": [
+                        {"url": "https://a.com", "title": "A", "raw_text": "Alpha text"}
+                    ],
+                    "reranked_contents": [
+                        {"url": "https://b.com", "title": "B", "raw_text": "Beta text"}
+                    ],
+                }
+            )
+        )
+
+    assert [row["url"] for row in state["summaries"]] == ["https://b.com"]
 
 def test_summarize_node_calls_llm():
     mock_llm = MagicMock()

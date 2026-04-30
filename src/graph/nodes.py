@@ -17,6 +17,11 @@ from src.errors import SearchError, FetchError, LLMError
 
 logger = logging.getLogger(__name__)
 
+_RERANK_MODEL = "pinecone-rerank-v0"
+_RERANK_TOP_K = 5
+_RERANK_CANDIDATE_LIMIT = 10
+_RERANK_MAX_DOC_CHARS = 1200
+
 
 def _extract_llm_text(response: object) -> str:
     """Extract plain text from provider-specific LLM response shapes."""
@@ -164,7 +169,96 @@ async def retrieve_node(state: ResearchState) -> ResearchState:
 
 
 # ---------------------------------------------------------------------------
-# Node 3: Summarize
+# Node 3: Rerank
+# ---------------------------------------------------------------------------
+
+
+async def rerank_node(state: ResearchState) -> ResearchState:
+    """Rerank retrieved sources with Pinecone-hosted rerank inference."""
+    query = state.get("query", "")
+    contents = state.get("retrieved_contents", [])
+    with start_step_span(
+        name="rerank_node",
+        run_type="chain",
+        node_name="rerank",
+        inputs={"source_count": len(contents), "top_k": _RERANK_TOP_K},
+    ):
+        if not contents:
+            return {
+                **state,
+                "reranked_contents": [],
+                "rerank_metadata": {
+                    "fallback": False,
+                    "reason": "empty_input",
+                    "model": _RERANK_MODEL,
+                    "input_count": 0,
+                    "output_count": 0,
+                },
+            }
+
+        limited = contents[:_RERANK_CANDIDATE_LIMIT]
+        prepared = []
+        for row in limited:
+            prepared.append(
+                {
+                    "url": row.get("url", ""),
+                    "title": row.get("title", ""),
+                    "raw_text": str(row.get("raw_text", ""))[:_RERANK_MAX_DOC_CHARS],
+                }
+            )
+
+        manager = VectorStoreManager()
+        try:
+            ranked = await asyncio.wait_for(
+                asyncio.to_thread(
+                    manager.rerank_documents,
+                    query=query,
+                    documents=prepared,
+                    model=_RERANK_MODEL,
+                    top_k=min(_RERANK_TOP_K, len(prepared)),
+                ),
+                timeout=2.5,
+            )
+            if not ranked:
+                return {
+                    **state,
+                    "reranked_contents": prepared,
+                    "rerank_metadata": {
+                        "fallback": True,
+                        "reason": "empty_rerank_response",
+                        "model": _RERANK_MODEL,
+                        "input_count": len(prepared),
+                        "output_count": len(prepared),
+                    },
+                }
+
+            return {
+                **state,
+                "reranked_contents": ranked,
+                "rerank_metadata": {
+                    "fallback": False,
+                    "model": _RERANK_MODEL,
+                    "input_count": len(prepared),
+                    "output_count": len(ranked),
+                },
+            }
+        except Exception as exc:
+            logger.warning("[rerank_node] failed; using retrieved order: %s", exc)
+            return {
+                **state,
+                "reranked_contents": prepared,
+                "rerank_metadata": {
+                    "fallback": True,
+                    "reason": str(exc),
+                    "model": _RERANK_MODEL,
+                    "input_count": len(prepared),
+                    "output_count": len(prepared),
+                },
+            }
+
+
+# ---------------------------------------------------------------------------
+# Node 4: Summarize
 # ---------------------------------------------------------------------------
 
 
@@ -173,7 +267,7 @@ async def summarize_node(state: ResearchState) -> ResearchState:
 
     Populates ``summaries``.
     """
-    contents = state.get("retrieved_contents", [])
+    contents = state.get("reranked_contents") or state.get("retrieved_contents", [])
     query = state.get("query", "")
     with start_step_span(
         name="summarize_node",
@@ -304,7 +398,7 @@ async def summarize_node(state: ResearchState) -> ResearchState:
 
 
 # ---------------------------------------------------------------------------
-# Node 4: Report
+# Node 5: Report
 # ---------------------------------------------------------------------------
 
 
@@ -372,7 +466,7 @@ async def report_node(state: ResearchState) -> ResearchState:
 
 
 # ---------------------------------------------------------------------------
-# Node 5: Vector Store
+# Node 6: Vector Store
 # ---------------------------------------------------------------------------
 
 
@@ -420,7 +514,7 @@ async def vector_store_node(state: ResearchState) -> ResearchState:
 
 
 # ---------------------------------------------------------------------------
-# Node 6: Memory Context
+# Node 7: Memory Context
 # ---------------------------------------------------------------------------
 
 

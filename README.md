@@ -12,7 +12,8 @@ flowchart LR
     search -->|"abort on error"| abortNode["abort"]
     retrieve -->|"ok"| memoryContext["memory_context (Pinecone search)"]
     retrieve -->|"empty"| emptyNode["empty"]
-    memoryContext --> summarize["summarize (LLM)"]
+    memoryContext --> rerank["rerank (Pinecone inference)"]
+    rerank --> summarize["summarize (LLM)"]
     summarize --> report["report (LLM markdown)"]
     report --> vectorStore["vector_store (optional Pinecone persist)"]
     vectorStore --> endNode["END"]
@@ -73,6 +74,7 @@ Reliability patterns used:
 | LangGraph State Machine | TypedDict state, conditional edges |
 | Multi-LLM support | OpenAI or Ollama — switched by env var |
 | Retry logic | Exponential back-off on search and fetch |
+| Source reranking | Two-stage retrieval with Pinecone hosted pointwise reranking (`pinecone-rerank-v0`) and fail-open fallback |
 | Streaming API | FastAPI SSE endpoint for real-time progress |
 | CLI | Typer + Rich for beautiful terminal output |
 | Vector storage | Pinecone for persisting and searching reports |
@@ -251,7 +253,7 @@ SSE event types:
 The pipeline includes end-to-end LangSmith instrumentation, so you can track the entire multi-step flow in one place.
 
 - A single **root run** is created per workflow execution (CLI or API).
-- Every graph node (`search`, `retrieve`, `memory_context`, `summarize`, `report`, `vector_store`) is traced as a child span.
+- Every graph node (`search`, `retrieve`, `memory_context`, `rerank`, `summarize`, `report`, `vector_store`) is traced as a child span.
 - External operations are traced as nested spans (Tavily search, URL fetch, LLM calls, Pinecone reads/writes).
 - Routing and terminal outcomes are visible (`continue`, `abort`, `empty`) with status and timing context.
 - Redaction-by-default protects sensitive payloads while preserving useful debugging metadata.

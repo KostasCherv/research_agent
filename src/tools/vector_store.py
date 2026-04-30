@@ -315,3 +315,52 @@ class VectorStoreManager:
             raise
         except Exception as exc:
             raise VectorStoreError(f"Failed to search run sources: {exc}") from exc
+
+    def rerank_documents(
+        self,
+        *,
+        query: str,
+        documents: list[dict],
+        model: str = "pinecone-rerank-v0",
+        top_k: int = 5,
+    ) -> list[dict]:
+        """Rerank source documents with Pinecone-hosted rerank inference."""
+        try:
+            self._ensure_index()
+            if self._pinecone_client is None:
+                raise VectorStoreError("Pinecone client is not initialized.")
+
+            input_docs = [
+                {
+                    "id": str(i),
+                    "text": f"{doc.get('title', '')}\n\n{doc.get('raw_text', '')}",
+                }
+                for i, doc in enumerate(documents)
+            ]
+            response = self._pinecone_client.inference.rerank(
+                model=model,
+                query=query,
+                documents=input_docs,
+                top_n=top_k,
+                return_documents=True,
+            )
+
+            ranked: list[dict] = []
+            for item in getattr(response, "data", []) or []:
+                doc_obj = getattr(item, "document", None)
+                doc_id = getattr(doc_obj, "id", None)
+                if doc_id is None:
+                    continue
+                try:
+                    index = int(doc_id)
+                except (TypeError, ValueError):
+                    continue
+                if 0 <= index < len(documents):
+                    source = {**documents[index], "score": float(getattr(item, "score", 0.0))}
+                    ranked.append(source)
+
+            return ranked
+        except VectorStoreError:
+            raise
+        except Exception as exc:
+            raise VectorStoreError(f"Failed to rerank documents: {exc}") from exc

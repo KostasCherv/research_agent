@@ -8,6 +8,8 @@ def test_state_is_typed_dict():
         "query": "What is LangGraph?",
         "search_results": [],
         "retrieved_contents": [],
+        "reranked_contents": [],
+        "rerank_metadata": {},
         "summaries": [],
         "report": "",
         "report_metadata": {},

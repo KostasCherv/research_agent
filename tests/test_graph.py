@@ -55,8 +55,19 @@ def test_graph_invoke_happy_path(monkeypatch):
         patch("src.graph.nodes.perform_search", return_value=search_result),
         patch("src.graph.nodes.fetch_url_content", new=AsyncMock(return_value="Fetched page text")),
         patch("src.graph.nodes.get_llm", return_value=mock_llm),
-        patch("src.graph.nodes.VectorStoreManager"),
+        patch("src.graph.nodes.VectorStoreManager") as mock_vs_cls,
     ):
+        mock_vs = MagicMock()
+        mock_vs.search_reports.return_value = []
+        mock_vs.rerank_documents.return_value = [
+            {
+                "url": "https://example.com",
+                "title": "Example",
+                "raw_text": "Fetched page text",
+                "score": 0.9,
+            }
+        ]
+        mock_vs_cls.return_value = mock_vs
         from src.graph.graph import build_graph
         graph = build_graph()
         final = asyncio.run(
@@ -88,6 +99,14 @@ def test_graph_invoke_continues_when_memory_lookup_fails():
     ):
         mock_vs = MagicMock()
         mock_vs.search_reports.side_effect = RuntimeError("chroma unavailable")
+        mock_vs.rerank_documents.return_value = [
+            {
+                "url": "https://example.com",
+                "title": "Example",
+                "raw_text": "Fetched page text",
+                "score": 0.9,
+            }
+        ]
         mock_vs_cls.return_value = mock_vs
 
         from src.graph.graph import build_graph
