@@ -207,7 +207,7 @@ export function AgentChat({ agent, accessToken, activeSessionId, onSessionActiva
 
       {/* Messages */}
       <ScrollArea className="min-h-0 flex-1 px-6 py-6 max-md:px-4">
-        <div className="max-w-2xl mx-auto space-y-4">
+        <div className="space-y-4">
           {messages.length === 0 && (
             <p className="py-8 text-center text-sm text-muted-foreground">
               Ask {agent.name} about its linked resources.
@@ -253,7 +253,7 @@ export function AgentChat({ agent, accessToken, activeSessionId, onSessionActiva
 
       {/* Composer */}
       <div className="shrink-0 border-t bg-background px-6 py-4 max-md:px-4">
-        <div className="max-w-2xl mx-auto flex gap-2 items-end">
+        <div className="flex gap-2 items-end">
           <Textarea
             className="resize-none min-h-10 max-h-32 text-sm"
             placeholder="Ask a question..."
