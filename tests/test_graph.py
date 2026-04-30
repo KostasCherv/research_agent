@@ -40,7 +40,15 @@ def test_graph_invoke_with_error_reaches_abort(monkeypatch):
 
 def test_graph_invoke_happy_path(monkeypatch):
     mock_llm = MagicMock()
-    mock_llm.ainvoke = AsyncMock(return_value=MagicMock(content="Mock LLM output."))
+    mock_llm.ainvoke = AsyncMock(
+        side_effect=[
+            MagicMock(
+                content='[{"url":"https://example.com","title":"Example","summary":"Source summary."}]'
+            ),
+            MagicMock(content="Combined insights."),
+            MagicMock(content="# Report\nFinal output."),
+        ]
+    )
 
     search_result = [{"url": "https://example.com", "title": "Example", "content": "Content"}]
 
@@ -62,7 +70,15 @@ def test_graph_invoke_happy_path(monkeypatch):
 
 def test_graph_invoke_continues_when_memory_lookup_fails():
     mock_llm = MagicMock()
-    mock_llm.ainvoke = AsyncMock(return_value=MagicMock(content="Mock LLM output."))
+    mock_llm.ainvoke = AsyncMock(
+        side_effect=[
+            MagicMock(
+                content='[{"url":"https://example.com","title":"Example","summary":"Source summary."}]'
+            ),
+            MagicMock(content="Combined insights."),
+            MagicMock(content="# Report\nFinal output."),
+        ]
+    )
 
     search_result = [{"url": "https://example.com", "title": "Example", "content": "Content"}]
 

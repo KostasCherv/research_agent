@@ -64,7 +64,11 @@ def test_retrieve_node_falls_back_to_snippet_on_failure():
 
 def test_summarize_node_calls_llm():
     mock_llm = MagicMock()
-    mock_llm.ainvoke = AsyncMock(return_value=MagicMock(content="Nice summary."))
+    mock_llm.ainvoke = AsyncMock(
+        return_value=MagicMock(
+            content='[{"url":"https://a.com","title":"A","summary":"Nice summary."}]'
+        )
+    )
 
     with patch("src.graph.nodes.get_llm", return_value=mock_llm):
         from src.graph.nodes import summarize_node
@@ -75,6 +79,36 @@ def test_summarize_node_calls_llm():
 
     assert len(state["summaries"]) == 1
     assert state["summaries"][0]["summary"] == "Nice summary."
+
+
+def test_summarize_node_makes_single_call_for_multiple_sources():
+    mock_llm = MagicMock()
+    mock_llm.ainvoke = AsyncMock(
+        return_value=MagicMock(
+            content=(
+                '[{"url":"https://a.com","title":"A","summary":"Summary A"},'
+                '{"url":"https://b.com","title":"B","summary":"Summary B"}]'
+            )
+        )
+    )
+
+    with patch("src.graph.nodes.get_llm", return_value=mock_llm):
+        from src.graph.nodes import summarize_node
+
+        state = asyncio.run(
+            summarize_node(
+                {
+                    "query": "LangGraph",
+                    "retrieved_contents": [
+                        {"url": "https://a.com", "title": "A", "raw_text": "Alpha text"},
+                        {"url": "https://b.com", "title": "B", "raw_text": "Beta text"},
+                    ],
+                }
+            )
+        )
+
+    assert mock_llm.ainvoke.await_count == 1
+    assert len(state["summaries"]) == 2
 
 
 # ---------------------------------------------------------------------------

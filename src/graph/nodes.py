@@ -1,6 +1,7 @@
 """All LangGraph nodes for the research pipeline."""
 
 import asyncio
+import json
 import logging
 from datetime import datetime, UTC
 
@@ -146,38 +147,94 @@ async def summarize_node(state: ResearchState) -> ResearchState:
         logger.info("[summarize_node] summarizing %d sources", len(contents))
 
         llm = get_llm(temperature=0.2)
-        summaries: list[dict] = []
+        prepared_sources: list[dict[str, str]] = []
+        source_blocks: list[str] = []
+        total_chars = 0
+        max_total_chars = 50000
+        per_source_limit = 10000
 
         for item in contents:
-            text = item.get("raw_text", "")[:6000]
-            if not text.strip():
+            text = item.get("raw_text", "").strip()
+            if not text:
                 continue
-            prompt = (
-                f"You are a research assistant. Summarize the following article in 3–5 sentences, "
-                f"focusing on information relevant to the query: '{query}'.\n\n"
-                f"Article ({item['url']}):\n{text}"
-            )
-            try:
-                response = await _invoke_llm(
-                    prompt,
-                    step_name="summarize",
-                    llm=llm,
-                    metadata={"source_url": item["url"]},
-                )
-                summary_text = (
-                    str(response.content) if hasattr(response, "content") else str(response)
-                )
-                summaries.append(
-                    {
-                        "url": item["url"],
-                        "title": item["title"],
-                        "summary": summary_text.strip(),
-                    }
-                )
-            except Exception as exc:
-                raise LLMError(f"Summarization failed for {item['url']}: {exc}") from exc
 
-        return {**state, "summaries": summaries}
+            url = str(item.get("url", "")).strip()
+            title = str(item.get("title", "")).strip()
+            if not url:
+                continue
+
+            remaining_budget = max_total_chars - total_chars
+            if remaining_budget <= 0:
+                break
+
+            clipped_text = text[: min(per_source_limit, remaining_budget)]
+            if not clipped_text.strip():
+                continue
+
+            prepared_sources.append({"url": url, "title": title})
+            source_blocks.append(
+                f"SOURCE URL: {url}\nSOURCE TITLE: {title}\nCONTENT:\n{clipped_text}"
+            )
+            total_chars += len(clipped_text)
+
+        if not source_blocks:
+            return {**state, "summaries": []}
+
+        prompt = (
+            "You are a research assistant. Create high-coverage source summaries relevant "
+            f"to the query '{query}'.\n"
+            "Return ONLY valid JSON with this exact schema:\n"
+            '[{"url":"<source-url>","title":"<source-title>","summary":"<3-5 sentences>"}]\n\n'
+            "Rules:\n"
+            "- Include one object per source provided.\n"
+            "- Preserve each source URL exactly as provided.\n"
+            "- Focus on facts and claims relevant to the query.\n"
+            "- Do not include markdown fences or extra text.\n\n"
+            "Sources:\n\n"
+            + "\n\n---\n\n".join(source_blocks)
+        )
+
+        try:
+            response = await _invoke_llm(
+                prompt,
+                step_name="summarize",
+                llm=llm,
+                metadata={"source_count": len(source_blocks), "query": query},
+            )
+            response_text = (
+                str(response.content) if hasattr(response, "content") else str(response)
+            ).strip()
+
+            parsed = json.loads(response_text)
+            if not isinstance(parsed, list):
+                raise ValueError("LLM summarize output must be a JSON list")
+
+            parsed_by_url: dict[str, dict[str, str]] = {}
+            for entry in parsed:
+                if not isinstance(entry, dict):
+                    continue
+                url = str(entry.get("url", "")).strip()
+                title = str(entry.get("title", "")).strip()
+                summary = str(entry.get("summary", "")).strip()
+                if url and summary:
+                    parsed_by_url[url] = {"url": url, "title": title, "summary": summary}
+
+            summaries: list[dict[str, str]] = []
+            for source in prepared_sources:
+                url = source["url"]
+                fallback_title = source["title"]
+                if url in parsed_by_url:
+                    row = parsed_by_url[url]
+                    if not row.get("title"):
+                        row["title"] = fallback_title
+                    summaries.append(row)
+
+            if not summaries:
+                raise ValueError("LLM summarize output did not include matched source summaries")
+
+            return {**state, "summaries": summaries}
+        except Exception as exc:
+            raise LLMError(f"Summarization failed: {exc}") from exc
 
 
 # ---------------------------------------------------------------------------
