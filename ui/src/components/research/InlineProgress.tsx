@@ -5,6 +5,7 @@ import type { ResearchStreamEvent } from '@/types'
 const NODE_ALIASES: Record<string, string> = {
   search: 'search_node',
   retrieve: 'retrieve_node',
+  memory_context: 'memory_context_node',
   summarize: 'summarize_node',
   combine: 'combine_node',
   report: 'report_node',
@@ -15,6 +16,7 @@ const NODE_ALIASES: Record<string, string> = {
 const NODE_LABELS: Record<string, string> = {
   search_node: 'Search',
   retrieve_node: 'Retrieve',
+  memory_context_node: 'Context',
   summarize_node: 'Summarize',
   combine_node: 'Combine',
   report_node: 'Report',
@@ -22,14 +24,18 @@ const NODE_LABELS: Record<string, string> = {
   __error__: 'Failed',
 }
 
-const ORDERED_PHASES = [
+const PIPELINE_PHASES = [
   'search_node',
   'retrieve_node',
+  'memory_context_node',
   'summarize_node',
   'combine_node',
   'report_node',
   'vector_store_node',
 ]
+
+// Customize this list to display only selected phases in the UI.
+const VISIBLE_PHASES = PIPELINE_PHASES
 
 type Props = {
   events: ResearchStreamEvent[]
@@ -41,16 +47,26 @@ export function InlineProgress({ events, isStreaming }: Props) {
 
   const normalizedNodes = events.map((e) => NODE_ALIASES[e.node] ?? e.node)
   const seenNodes = new Set(normalizedNodes)
-  const latestNode = normalizedNodes.at(-1) ?? null
-  const latestIndex = latestNode ? ORDERED_PHASES.indexOf(latestNode) : -1
+  const latestVisibleNode = [...normalizedNodes].reverse().find((node) => VISIBLE_PHASES.includes(node)) ?? null
+  const furthestKnownPhaseIndex = normalizedNodes.reduce((max, node) => {
+    const idx = PIPELINE_PHASES.indexOf(node)
+    return idx > max ? idx : max
+  }, -1)
   const hasError = seenNodes.has('__error__')
   const ended = seenNodes.has('__end__')
+  const hasCurrent = isStreaming && !ended && !hasError
 
   return (
     <div className="flex items-center gap-1 flex-wrap" aria-live="polite">
-      {ORDERED_PHASES.map((node, index) => {
-        const complete = seenNodes.has(node) && (latestIndex > index || ended)
-        const current = latestNode === node && isStreaming && !ended
+      {VISIBLE_PHASES.map((node, index) => {
+        const phaseIndex = PIPELINE_PHASES.indexOf(node)
+        const complete = ended || (phaseIndex !== -1 && phaseIndex < furthestKnownPhaseIndex)
+        const current =
+          hasCurrent &&
+          (latestVisibleNode === node ||
+            (!latestVisibleNode &&
+              furthestKnownPhaseIndex === -1 &&
+              node === VISIBLE_PHASES[0]))
         const seen = seenNodes.has(node)
 
         return (
@@ -76,7 +92,7 @@ export function InlineProgress({ events, isStreaming }: Props) {
               )}
               {NODE_LABELS[node] ?? node}
             </span>
-            {index < ORDERED_PHASES.length - 1 && (
+            {index < VISIBLE_PHASES.length - 1 && (
               <span className="text-muted-foreground/40 text-xs select-none">›</span>
             )}
           </div>
