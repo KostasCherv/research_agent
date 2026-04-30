@@ -6,7 +6,6 @@ import { streamFollowup } from '@/api/client'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
-import { ScrollArea } from '@/components/ui/scroll-area'
 import { Textarea } from '@/components/ui/textarea'
 import type { Citation, ConversationTurn } from '@/types'
 
@@ -184,7 +183,7 @@ export function FollowupChat({
         <p className="text-xs text-muted-foreground mt-0.5">Grounded to the same research sources.</p>
       </div>
 
-      <ScrollArea className="flex-1 max-h-[520px]">
+      <div className="max-h-[520px] overflow-y-auto">
         <div className="px-4 py-4 flex flex-col gap-4">
           {conversation.length === 0 && !streaming && (
             <p className="text-sm text-muted-foreground text-center py-4">No questions yet. Ask something below.</p>
@@ -223,7 +222,7 @@ export function FollowupChat({
 
           <div ref={bottomRef} />
         </div>
-      </ScrollArea>
+      </div>
 
       {suggestions.length > 0 && (
         <div className="px-3 pt-2 flex flex-wrap gap-2">

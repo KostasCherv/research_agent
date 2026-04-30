@@ -30,6 +30,7 @@ type Props = {
   onEditAgent: (agent: RagAgent) => void
   onAgentDeleted: (agentId: string) => void
   onNewAgent: () => void
+  onNewResearch: () => void
 }
 
 type ResearchSession = SessionSummary
@@ -166,6 +167,7 @@ export function AgentRail({
   onEditAgent,
   onAgentDeleted,
   onNewAgent,
+  onNewResearch,
 }: Props) {
   const { theme, toggle } = useTheme()
   const accessToken = authSession?.access_token ?? null
@@ -209,19 +211,31 @@ export function AgentRail({
       <div className="flex min-h-0 flex-1 flex-col overflow-y-auto py-2">
         <div className="shrink-0 space-y-0.5 pl-2 pr-4">
           {/* Research */}
-          <button
-            type="button"
-            onClick={() => onViewChange({ type: 'research' })}
-            className={cn(
-              'w-full flex items-center gap-2.5 rounded-md px-2 py-1.5 text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-secondary',
-              isResearch
-                ? 'bg-background text-foreground font-medium shadow-sm'
-                : 'text-muted-foreground hover:text-foreground hover:bg-muted/60',
-            )}
-          >
-            <Telescope size={15} className="shrink-0" />
-            Research
-          </button>
+          <div className="flex items-center gap-1">
+            <button
+              type="button"
+              onClick={() => onViewChange({ type: 'research' })}
+              className={cn(
+                'min-w-0 flex-1 flex items-center gap-2.5 rounded-md px-2 py-1.5 text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-secondary',
+                isResearch
+                  ? 'bg-background text-foreground font-medium shadow-sm'
+                  : 'text-muted-foreground hover:text-foreground hover:bg-muted/60',
+              )}
+            >
+              <Telescope size={15} className="shrink-0" />
+              Research
+            </button>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="size-6 shrink-0 rounded-md border border-border bg-background text-foreground shadow-sm hover:border-primary/30 hover:bg-background hover:text-primary"
+              onClick={authSession ? onNewResearch : onSignIn}
+              aria-label={authSession ? 'New research' : 'Sign in to create a research session'}
+              title={authSession ? 'New research' : 'Sign in to create a research session'}
+            >
+              <Plus size={14} />
+            </Button>
+          </div>
         </div>
 
         {/* Research sessions */}

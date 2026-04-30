@@ -164,6 +164,10 @@ export function AppShell() {
           setEditingAgent(null)
           setNewAgentSheetOpen(true)
         }}
+        onNewResearch={() => {
+          setActiveView({ type: 'research' })
+          setActiveSessionId(null)
+        }}
       />
       <div className="flex-1 min-w-0 overflow-hidden max-md:min-h-0">
         {activeView.type === 'research' && (

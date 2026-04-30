@@ -9,9 +9,10 @@ type Props = {
   onSubmit: (query: string, useVectorStore: boolean) => Promise<void>
   disabled: boolean
   isStreaming: boolean
+  showSubmit?: boolean
 }
 
-export function QueryComposer({ onSubmit, disabled, isStreaming }: Props) {
+export function QueryComposer({ onSubmit, disabled, isStreaming, showSubmit = true }: Props) {
   const [query, setQuery] = useState('')
   const [useVectorStore, setUseVectorStore] = useState(true)
 
@@ -51,19 +52,21 @@ export function QueryComposer({ onSubmit, disabled, isStreaming }: Props) {
             Store in knowledge base
           </Label>
         </div>
-        <Button type="submit" disabled={disabled || !query.trim()} size="sm">
-          {isStreaming ? (
-            <>
-              <Loader2 size={13} className="animate-spin" />
-              Running...
-            </>
-          ) : (
-            <>
-              <SendHorizontal size={13} />
-              {disabled ? 'Sign in to run' : 'Run research'}
-            </>
-          )}
-        </Button>
+        {showSubmit && (
+          <Button type="submit" disabled={disabled || !query.trim()} size="sm">
+            {isStreaming ? (
+              <>
+                <Loader2 size={13} className="animate-spin" />
+                Running...
+              </>
+            ) : (
+              <>
+                <SendHorizontal size={13} />
+                {disabled ? 'Sign in to run' : 'Run research'}
+              </>
+            )}
+          </Button>
+        )}
       </div>
     </form>
   )

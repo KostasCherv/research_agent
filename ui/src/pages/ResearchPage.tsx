@@ -175,36 +175,31 @@ export function ResearchPage({ authSession, activeSessionId, onSessionActivated,
           </div>
         </div>
       ) : (
-        // Active state: scrollable content + pinned composer
+        // Active state: scrollable content
         <ScrollArea className="flex-1 min-h-0">
-          <div className="mx-auto max-w-2xl space-y-6 px-6 py-8 max-md:px-4">
-            <InlineProgress events={events} isStreaming={isStreaming} />
-            <ReportViewer report={report} query={lastQuery} isStreaming={isStreaming} error={error} />
+          <div className="space-y-6 py-8">
+            <div className="mx-auto max-w-2xl px-6 max-md:px-4">
+              <InlineProgress events={events} isStreaming={isStreaming} />
+            </div>
+            <div className="mx-auto max-w-2xl px-6 max-md:px-4">
+              <ReportViewer report={report} query={lastQuery} isStreaming={isStreaming} error={error} />
+            </div>
             {report && sessionId && (
-              <FollowupChat
-                key={sessionId}
-                sessionId={sessionId}
-                runId={runId}
-                accessToken={authSession?.access_token ?? null}
-                conversation={conversation}
-                onConversationUpdate={handleConversationUpdate}
-              />
+              <div className="w-full px-6 max-md:px-4">
+                <FollowupChat
+                  key={sessionId}
+                  sessionId={sessionId}
+                  runId={runId}
+                  accessToken={authSession?.access_token ?? null}
+                  conversation={conversation}
+                  onConversationUpdate={handleConversationUpdate}
+                />
+              </div>
             )}
           </div>
         </ScrollArea>
       )}
 
-      {hasContent && (
-        <div className="shrink-0 border-t bg-background px-6 py-4 max-md:px-4">
-          <div className="max-w-2xl mx-auto">
-            <QueryComposer
-              onSubmit={handleSubmit}
-              disabled={isStreaming || !authSession}
-              isStreaming={isStreaming}
-            />
-          </div>
-        </div>
-      )}
     </div>
   )
 }
