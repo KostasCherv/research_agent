@@ -37,6 +37,7 @@ from src.rag import (
     RagChatMessage,
     RagValidationError,
     append_chat_message,
+    delete_chat_session as delete_rag_chat_session,
     create_agent as create_rag_agent_record,
     create_or_get_chat_session,
     create_resource_and_ingest,
@@ -50,6 +51,7 @@ from src.rag import (
     list_chat_sessions as list_rag_chat_sessions,
     list_resources as list_rag_resources_records,
     retrieve_context_for_query,
+    update_chat_session_title as update_rag_chat_session_title,
     update_agent as update_rag_agent_record,
 )
 from src.inngest_client import handle_rag_ingestion, inngest_client
@@ -737,6 +739,7 @@ async def rag_chat_with_agent(
         user_id=current_user.user_id,
         agent_id=agent_id,
         session_id=body.session_id,
+        initial_message=normalized_message,
     )
     history = await list_rag_chat_messages(chat_session_id, current_user.user_id)
 
@@ -829,6 +832,7 @@ async def rag_chat_with_agent_stream(
         user_id=current_user.user_id,
         agent_id=agent_id,
         session_id=body.session_id,
+        initial_message=normalized_message,
     )
     history = await list_rag_chat_messages(chat_session_id, current_user.user_id)
     history_block = "\n".join(f"{m.role.upper()}: {m.content}" for m in history[-10:])
@@ -940,3 +944,51 @@ async def list_rag_agent_chat_session_messages(
         "agent_id": agent_id,
         "messages": [m.to_dict() for m in messages],
     }
+
+
+@app.patch("/api/rag/agents/{agent_id}/chat/sessions/{session_id}", tags=["RAG"])
+async def update_rag_agent_chat_session_title(
+    agent_id: str,
+    session_id: str,
+    body: UpdateSessionTitleRequest,
+    current_user: AuthenticatedUser = Depends(get_authenticated_user),
+):
+    agent_bundle = await get_agent_for_chat(agent_id, current_user.user_id)
+    if agent_bundle is None:
+        raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found.")
+
+    title = " ".join(body.title.strip().split())
+    if not title:
+        raise HTTPException(status_code=400, detail="Session title cannot be empty.")
+    if len(title) > 120:
+        raise HTTPException(status_code=400, detail="Session title is too long.")
+
+    updated = await update_rag_chat_session_title(
+        session_id=session_id,
+        agent_id=agent_id,
+        user_id=current_user.user_id,
+        title=title,
+    )
+    if not updated:
+        raise HTTPException(status_code=404, detail=f"Chat session '{session_id}' not found.")
+    return {"session_id": session_id, "title": title}
+
+
+@app.delete("/api/rag/agents/{agent_id}/chat/sessions/{session_id}", tags=["RAG"])
+async def delete_rag_agent_chat_session(
+    agent_id: str,
+    session_id: str,
+    current_user: AuthenticatedUser = Depends(get_authenticated_user),
+):
+    agent_bundle = await get_agent_for_chat(agent_id, current_user.user_id)
+    if agent_bundle is None:
+        raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found.")
+
+    deleted = await delete_rag_chat_session(
+        session_id=session_id,
+        agent_id=agent_id,
+        user_id=current_user.user_id,
+    )
+    if not deleted:
+        raise HTTPException(status_code=404, detail=f"Chat session '{session_id}' not found.")
+    return {"session_id": session_id, "deleted": True}

@@ -74,4 +74,5 @@ async def test_store_lists_rag_chat_sessions_with_batched_latest_messages():
     assert messages_call.args == ("GET", "rag_chat_messages")
     assert messages_call.kwargs["params"]["session_id"] == "in.(chat-1,chat-2)"
     assert summaries[0]["session_id"] == "chat-2"
+    assert summaries[0]["title"] == "New chat"
     assert summaries[0]["last_message_preview"] == "Most recent chat"

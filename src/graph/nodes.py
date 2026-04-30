@@ -1,6 +1,7 @@
 """All LangGraph nodes for the research pipeline."""
 
 import asyncio
+import concurrent.futures
 import logging
 from datetime import datetime, UTC
 
@@ -357,13 +358,20 @@ def memory_context_node(state: ResearchState) -> ResearchState:
                 inputs={"query": query, "n_results": 3},
                 tags=["external", "pinecone"],
             ):
-                context = vector_store.search_reports(query)
+                # Guard against long/hung vector-store calls so the research
+                # pipeline can continue even if Pinecone is slow/unreachable.
+                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+                    future = executor.submit(vector_store.search_reports, query)
+                    context = future.result(timeout=8)
             if context:
                 context = "\n\n".join([c["document"] for c in context])[:2000]
             else:
                 context = ""
 
             return {**state, "memory_context": context}
+        except concurrent.futures.TimeoutError:
+            logger.warning("[memory_context_node] timed out while fetching context; continuing without memory context.")
+            return {**state, "memory_context": ""}
         except Exception as exc:
             logger.warning("[memory_context_node] could not generate context: %s", exc)
             return {**state, "memory_context": ""}

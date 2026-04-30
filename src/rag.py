@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -196,9 +197,54 @@ def _normalize_state(value: str) -> str:
     return value if value in _RESOURCE_STATES else "failed"
 
 
+def _fallback_chat_title(message: str | None) -> str:
+    if not message or not message.strip():
+        return "New chat"
+    cleaned = " ".join(message.strip().split())
+    if not cleaned:
+        return "New chat"
+    words = cleaned.split(" ")
+    if len(words) > 6:
+        cleaned = " ".join(words[:6])
+    return cleaned[:120] or "New chat"
+
+
+def _suggest_chat_session_title_sync(message: str | None) -> str:
+    fallback = _fallback_chat_title(message)
+    if not message or not message.strip():
+        return fallback
+    prompt = (
+        "Create a concise title (max 5 words) for this agent chat session.\n"
+        "Return plain text only, no quotes, no punctuation at the end.\n"
+        f"First user message: {message.strip()}"
+    )
+    try:
+        from src.llm.factory import get_llm
+
+        llm = get_llm(temperature=0.1)
+        result = llm.invoke(prompt)
+        text = result.content if hasattr(result, "content") else str(result)
+        candidate = " ".join(text.strip().split())
+        if not candidate:
+            return fallback
+        words = candidate.split(" ")
+        if len(words) > 6:
+            candidate = " ".join(words[:6])
+        return candidate[:120] or fallback
+    except Exception:
+        return fallback
+
+
+async def suggest_chat_session_title(message: str | None) -> str:
+    # LLM calls can block; keep title generation off the event loop.
+    return await asyncio.to_thread(_suggest_chat_session_title_sync, message)
+
+
 async def list_resources(user_id: str) -> list[RagResource]:
     workspace_id = _workspace_id_for_user(user_id)
-    rows = await _get_store().list_rag_resources(owner_id=user_id, workspace_id=workspace_id)
+    rows = await _get_store().list_rag_resources(
+        owner_id=user_id, workspace_id=workspace_id
+    )
     return [RagResource(**row) for row in rows]
 
 
@@ -214,7 +260,9 @@ async def get_resource(resource_id: str, user_id: str) -> RagResource | None:
     return RagResource(**row)
 
 
-async def create_resource_and_ingest(file: UploadFile, user_id: str) -> tuple[RagResource, RagIngestionJob]:
+async def create_resource_and_ingest(
+    file: UploadFile, user_id: str
+) -> tuple[RagResource, RagIngestionJob]:
     content = await file.read()
     _validate_upload(file, content)
 
@@ -441,7 +489,9 @@ async def delete_resource(resource_id: str, user_id: str) -> bool:
         return False
 
     try:
-        await delete_resource_artifacts(store=_get_store(), resource_id=resource.resource_id)
+        await delete_resource_artifacts(
+            store=_get_store(), resource_id=resource.resource_id
+        )
     except Exception:
         # Sidecar cleanup is best-effort; resource deletion still proceeds.
         pass
@@ -462,7 +512,9 @@ async def delete_resource(resource_id: str, user_id: str) -> bool:
 
 async def list_agents(user_id: str) -> list[RagAgent]:
     workspace_id = _workspace_id_for_user(user_id)
-    rows = await _get_store().list_rag_agents(owner_id=user_id, workspace_id=workspace_id)
+    rows = await _get_store().list_rag_agents(
+        owner_id=user_id, workspace_id=workspace_id
+    )
     return [RagAgent(**row) for row in rows]
 
 
@@ -641,7 +693,11 @@ async def _validate_resources_linkable(
             "One or more resources are not available in your workspace.",
         )
 
-    non_ready = [r["resource_id"] for r in resources if _normalize_state(r.get("state", "")) != "ready"]
+    non_ready = [
+        r["resource_id"]
+        for r in resources
+        if _normalize_state(r.get("state", "")) != "ready"
+    ]
     if non_ready:
         raise RagValidationError(
             "processing_failed",
@@ -649,7 +705,9 @@ async def _validate_resources_linkable(
         )
 
 
-async def get_agent_for_chat(agent_id: str, user_id: str) -> tuple[RagAgent, list[str]] | None:
+async def get_agent_for_chat(
+    agent_id: str, user_id: str
+) -> tuple[RagAgent, list[str]] | None:
     workspace_id = _workspace_id_for_user(user_id)
     row = await _get_store().get_rag_agent(
         agent_id=agent_id,
@@ -662,7 +720,13 @@ async def get_agent_for_chat(agent_id: str, user_id: str) -> tuple[RagAgent, lis
     return RagAgent(**row), linked
 
 
-async def create_or_get_chat_session(*, user_id: str, agent_id: str, session_id: str | None) -> str:
+async def create_or_get_chat_session(
+    *,
+    user_id: str,
+    agent_id: str,
+    session_id: str | None,
+    initial_message: str | None = None,
+) -> str:
     if session_id:
         valid = await _get_store().get_rag_chat_session(
             session_id=session_id,
@@ -679,13 +743,18 @@ async def create_or_get_chat_session(*, user_id: str, agent_id: str, session_id:
             "owner_id": user_id,
             "agent_id": agent_id,
             "workspace_id": _workspace_id_for_user(user_id),
+            "title": await suggest_chat_session_title(initial_message),
         }
     )
     return new_session
 
 
-async def list_chat_sessions(agent_id: str, user_id: str) -> list[dict[str, str | None]]:
-    return await _get_store().list_rag_chat_sessions(agent_id=agent_id, owner_id=user_id)
+async def list_chat_sessions(
+    agent_id: str, user_id: str
+) -> list[dict[str, str | None]]:
+    return await _get_store().list_rag_chat_sessions(
+        agent_id=agent_id, owner_id=user_id
+    )
 
 
 async def get_chat_session(
@@ -701,12 +770,33 @@ async def get_chat_session(
     )
 
 
+async def update_chat_session_title(
+    *, session_id: str, agent_id: str, user_id: str, title: str
+) -> bool:
+    return await _get_store().update_rag_chat_session_title(
+        session_id=session_id,
+        owner_id=user_id,
+        agent_id=agent_id,
+        title=title,
+    )
+
+
+async def delete_chat_session(*, session_id: str, agent_id: str, user_id: str) -> bool:
+    return await _get_store().delete_rag_chat_session(
+        session_id=session_id,
+        owner_id=user_id,
+        agent_id=agent_id,
+    )
+
+
 async def append_chat_message(message: RagChatMessage) -> None:
     await _get_store().create_rag_chat_message(message.to_dict())
 
 
 async def list_chat_messages(session_id: str, user_id: str) -> list[RagChatMessage]:
-    rows = await _get_store().list_rag_chat_messages(session_id=session_id, owner_id=user_id)
+    rows = await _get_store().list_rag_chat_messages(
+        session_id=session_id, owner_id=user_id
+    )
     return [RagChatMessage(**row) for row in rows]
 
 

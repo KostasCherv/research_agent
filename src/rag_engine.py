@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import re
 from dataclasses import dataclass
 from io import BytesIO
@@ -51,7 +52,8 @@ async def read_locator_bytes(file_locator: str) -> tuple[bytes, str]:
     path = Path(file_locator)
     if not path.exists():
         raise FileNotFoundError(f"File not found: {file_locator}")
-    return path.read_bytes(), path.suffix.lower()
+    content = await asyncio.to_thread(path.read_bytes)
+    return content, path.suffix.lower()
 
 
 def extract_text_from_bytes(content: bytes, suffix: str) -> str:
@@ -86,8 +88,10 @@ async def ingest_resource_from_locator(
     workspace_id: str,
 ) -> int:
     content, suffix = await read_locator_bytes(file_locator)
-    text = extract_text_from_bytes(content, suffix)
-    chunks = _chunk_text(text)
+    # Parsing PDF/DOCX and chunking can be CPU-bound; keep this off the
+    # main event loop so concurrent API streams remain responsive.
+    text = await asyncio.to_thread(extract_text_from_bytes, content, suffix)
+    chunks = await asyncio.to_thread(_chunk_text, text)
     await store.upsert_rag_sidecar_artifact(
         resource_id=resource_id,
         owner_id=owner_id,

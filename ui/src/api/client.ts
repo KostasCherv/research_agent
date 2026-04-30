@@ -654,3 +654,38 @@ export async function getRagAgentChatSessionMessages(
     messages: RagChatMessage[]
   }
 }
+
+export async function updateRagAgentChatSessionTitle(
+  agentId: string,
+  sessionId: string,
+  title: string,
+  accessToken: string | null,
+): Promise<{ session_id: string; title: string }> {
+  const response = await fetch(`${API_BASE}/api/rag/agents/${agentId}/chat/sessions/${sessionId}`, {
+    method: 'PATCH',
+    headers: {
+      'Content-Type': 'application/json',
+      ...authHeaders(accessToken),
+    },
+    body: JSON.stringify({ title }),
+  })
+  if (!response.ok) {
+    throw new Error(`Failed to rename RAG chat session: ${response.status}`)
+  }
+  return (await response.json()) as { session_id: string; title: string }
+}
+
+export async function deleteRagAgentChatSession(
+  agentId: string,
+  sessionId: string,
+  accessToken: string | null,
+): Promise<{ session_id: string; deleted: boolean }> {
+  const response = await fetch(`${API_BASE}/api/rag/agents/${agentId}/chat/sessions/${sessionId}`, {
+    method: 'DELETE',
+    headers: authHeaders(accessToken),
+  })
+  if (!response.ok) {
+    throw new Error(`Failed to delete RAG chat session: ${response.status}`)
+  }
+  return (await response.json()) as { session_id: string; deleted: boolean }
+}

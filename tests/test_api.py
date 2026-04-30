@@ -437,6 +437,7 @@ def test_rag_chat_sessions_returns_agent_scoped_summaries():
                         "session_id": "chat-1",
                         "agent_id": "agent-1",
                         "owner_id": "test-user",
+                        "title": "Refund policy discussion",
                         "created_at": "2026-04-23T09:00:00+00:00",
                         "last_message_at": "2026-04-23T09:05:00+00:00",
                         "last_message_preview": "What is the refund window?",
@@ -450,6 +451,7 @@ def test_rag_chat_sessions_returns_agent_scoped_summaries():
     assert response.status_code == 200
     payload = response.json()
     assert payload["sessions"][0]["session_id"] == "chat-1"
+    assert payload["sessions"][0]["title"] == "Refund policy discussion"
     assert payload["sessions"][0]["last_message_preview"] == "What is the refund window?"
 
 
@@ -505,6 +507,44 @@ def test_rag_chat_session_messages_returns_404_for_unknown_session():
         response = client.get("/api/rag/agents/agent-1/chat/sessions/chat-404/messages")
 
     assert response.status_code == 404
+
+
+def test_rag_chat_session_title_update():
+    mock_agent = MagicMock()
+    with (
+        patch("src.api.endpoints.get_agent_for_chat", new=AsyncMock(return_value=(mock_agent, ["res-1"]))),
+        patch("src.api.endpoints.update_rag_chat_session_title", new=AsyncMock(return_value=True)),
+    ):
+        response = client.patch(
+            "/api/rag/agents/agent-1/chat/sessions/chat-1",
+            json={"title": "Policy summary"},
+        )
+
+    assert response.status_code == 200
+    assert response.json() == {"session_id": "chat-1", "title": "Policy summary"}
+
+
+def test_rag_chat_session_title_update_rejects_empty_title():
+    mock_agent = MagicMock()
+    with patch("src.api.endpoints.get_agent_for_chat", new=AsyncMock(return_value=(mock_agent, ["res-1"]))):
+        response = client.patch(
+            "/api/rag/agents/agent-1/chat/sessions/chat-1",
+            json={"title": "    "},
+        )
+
+    assert response.status_code == 400
+
+
+def test_rag_chat_session_delete():
+    mock_agent = MagicMock()
+    with (
+        patch("src.api.endpoints.get_agent_for_chat", new=AsyncMock(return_value=(mock_agent, ["res-1"]))),
+        patch("src.api.endpoints.delete_rag_chat_session", new=AsyncMock(return_value=True)),
+    ):
+        response = client.delete("/api/rag/agents/agent-1/chat/sessions/chat-1")
+
+    assert response.status_code == 200
+    assert response.json() == {"session_id": "chat-1", "deleted": True}
 
 
 def _async_iter(items):

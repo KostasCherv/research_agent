@@ -1,5 +1,5 @@
 from io import BytesIO
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from starlette.datastructures import UploadFile
 
@@ -7,10 +7,13 @@ from src.rag import (
     RagValidationError,
     _run_ingestion_job,
     create_resource_and_ingest,
+    delete_chat_session,
     get_chat_session,
     list_chat_sessions,
     process_queued_ingestion_jobs,
     run_ingestion_job_now,
+    suggest_chat_session_title,
+    update_chat_session_title,
 )
 
 
@@ -79,6 +82,65 @@ async def test_get_chat_session_is_scoped_to_owner_and_agent():
     )
     assert session is not None
     assert session["session_id"] == "chat-1"
+
+
+async def test_update_chat_session_title_delegates_to_store():
+    mock_store = AsyncMock()
+    mock_store.update_rag_chat_session_title.return_value = True
+
+    with patch("src.rag._get_store", return_value=mock_store):
+        updated = await update_chat_session_title(
+            session_id="chat-1",
+            agent_id="agent-1",
+            user_id="user-1",
+            title="Updated title",
+        )
+
+    assert updated is True
+    mock_store.update_rag_chat_session_title.assert_awaited_once_with(
+        session_id="chat-1",
+        owner_id="user-1",
+        agent_id="agent-1",
+        title="Updated title",
+    )
+
+
+async def test_delete_chat_session_delegates_to_store():
+    mock_store = AsyncMock()
+    mock_store.delete_rag_chat_session.return_value = True
+
+    with patch("src.rag._get_store", return_value=mock_store):
+        deleted = await delete_chat_session(
+            session_id="chat-1",
+            agent_id="agent-1",
+            user_id="user-1",
+        )
+
+    assert deleted is True
+    mock_store.delete_rag_chat_session.assert_awaited_once_with(
+        session_id="chat-1",
+        owner_id="user-1",
+        agent_id="agent-1",
+    )
+
+
+async def test_suggest_chat_session_title_uses_llm_result():
+    mock_llm = MagicMock()
+    mock_llm.invoke.return_value = type("R", (), {"content": "Pricing policy comparison"})()
+
+    with patch("src.llm.factory.get_llm", return_value=mock_llm):
+        assert (
+            await suggest_chat_session_title("Compare pricing policy docs")
+            == "Pricing policy comparison"
+        )
+
+
+async def test_suggest_chat_session_title_fallback_when_llm_fails():
+    with patch("src.llm.factory.get_llm", side_effect=RuntimeError("llm down")):
+        assert (
+            await suggest_chat_session_title("How to reset access token quickly")
+            == "How to reset access token quickly"
+        )
 
 
 async def test_run_ingestion_job_marks_ready_on_success():

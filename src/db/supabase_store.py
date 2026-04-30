@@ -788,6 +788,7 @@ class SupabaseSessionStore:
             "owner_id": payload["owner_id"],
             "workspace_id": payload["workspace_id"],
             "agent_id": payload["agent_id"],
+            "title": payload.get("title") or "New chat",
             "created_at": datetime.now(UTC).isoformat(),
         }
         await self._request("POST", "rag_chat_sessions", json_body=body)
@@ -803,7 +804,7 @@ class SupabaseSessionStore:
             "GET",
             "rag_chat_sessions",
             params={
-                "select": "id,owner_id,workspace_id,agent_id,created_at",
+                "select": "id,owner_id,workspace_id,agent_id,title,created_at",
                 "id": f"eq.{session_id}",
                 "owner_id": f"eq.{owner_id}",
                 "agent_id": f"eq.{agent_id}",
@@ -819,6 +820,7 @@ class SupabaseSessionStore:
             "owner_id": row["owner_id"],
             "workspace_id": row["workspace_id"],
             "agent_id": row["agent_id"],
+            "title": row.get("title") or "New chat",
             "created_at": row.get("created_at"),
         }
 
@@ -832,7 +834,7 @@ class SupabaseSessionStore:
             "GET",
             "rag_chat_sessions",
             params={
-                "select": "id,owner_id,workspace_id,agent_id,created_at",
+                "select": "id,owner_id,workspace_id,agent_id,title,created_at",
                 "owner_id": f"eq.{owner_id}",
                 "agent_id": f"eq.{agent_id}",
                 "order": "created_at.desc",
@@ -869,6 +871,7 @@ class SupabaseSessionStore:
                     "owner_id": row["owner_id"],
                     "workspace_id": row["workspace_id"],
                     "agent_id": row["agent_id"],
+                    "title": row.get("title") or "New chat",
                     "created_at": row.get("created_at"),
                     "last_message_at": latest.get("created_at") or row.get("created_at"),
                     "last_message_preview": preview,
@@ -880,6 +883,48 @@ class SupabaseSessionStore:
             key=lambda summary: summary.get("last_message_at") or summary.get("created_at") or "",
             reverse=True,
         )
+
+    async def update_rag_chat_session_title(
+        self,
+        *,
+        session_id: str,
+        owner_id: str,
+        agent_id: str,
+        title: str,
+    ) -> bool:
+        response = await self._request(
+            "PATCH",
+            "rag_chat_sessions",
+            params={
+                "id": f"eq.{session_id}",
+                "owner_id": f"eq.{owner_id}",
+                "agent_id": f"eq.{agent_id}",
+            },
+            json_body={"title": title},
+            extra_headers={"Prefer": "return=representation"},
+        )
+        rows = response.json()
+        return bool(rows)
+
+    async def delete_rag_chat_session(
+        self,
+        *,
+        session_id: str,
+        owner_id: str,
+        agent_id: str,
+    ) -> bool:
+        response = await self._request(
+            "DELETE",
+            "rag_chat_sessions",
+            params={
+                "id": f"eq.{session_id}",
+                "owner_id": f"eq.{owner_id}",
+                "agent_id": f"eq.{agent_id}",
+            },
+            extra_headers={"Prefer": "return=representation"},
+        )
+        rows = response.json()
+        return bool(rows)
 
     async def create_rag_chat_message(self, payload: dict[str, Any]) -> None:
         body = {
